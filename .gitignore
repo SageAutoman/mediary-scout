@@ -1,0 +1,17 @@
+.env
+.env.local
+.env.*.local
+.pan115_cookie
+
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.sisyphus/
+
+.venv/
+venv/
+
+*.db
+*.sqlite
+*.sqlite3
+
