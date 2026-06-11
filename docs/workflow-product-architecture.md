@@ -663,6 +663,13 @@ Product lessons:
 1. `PansouProvider` can validate the first product loop.
    Even without 115 share links, a magnet candidate can complete the workflow.
 
+   The TypeScript kernel now treats PanSou as a `ResourceProvider` adapter. Its
+   job is to call `/api/search`, expand 115 and magnet links into
+   `ResourceCandidate` rows, attach episode/quality hints when they are visible
+   in titles, and return a content-hashed `ResourceSnapshot`. It does not own
+   transfer, 115 execution, or agent judgment. Those remain separate workflow
+   steps.
+
 2. Verification must use video-file discovery, not only current-level folder
    listing.
    In the run, `list_files(depth=2)` returned no visible items immediately after
