@@ -236,6 +236,13 @@ Magnet links are not a source by themselves; they are a resource locator and
 transfer format that must still come from an index.
 115 is an acquisition/storage execution layer.
 
+In the TypeScript kernel, `Storage115Executor` implements the storage execution
+port for this layer. It consumes the selected `ResourceCandidate`, executes 115
+share receive or magnet offline-task actions through an injected
+`Pan115StorageApi`, then re-lists the target directory to decide which video
+files actually materialized. Cookie handling and the concrete 115 API client
+stay outside the workflow kernel.
+
 The current skill uses PanSou because it has strong practical coverage,
 especially for new Chinese-language resources maintained through Telegram-style
 resource channels. That is useful for self-use and early workflow validation.
@@ -1631,6 +1638,11 @@ Hard rules:
 - support user-initiated disconnect/revoke
 - report expiration as "needs reconnect", not as raw cookie failure text
 - bind every 115 operation to a user/account scope
+
+The current TypeScript boundary reflects this rule: `Storage115Executor`
+requires an injected `Pan115StorageApi`. A future account-connection service can
+decrypt a user's stored credential, build the concrete 115 API client for that
+user, and pass only that scoped client into the workflow run.
 
 This keeps the product aligned with the larger credential boundary:
 
