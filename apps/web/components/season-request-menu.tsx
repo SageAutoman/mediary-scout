@@ -9,19 +9,26 @@ import {
 } from "../app/actions";
 
 /**
- * Acquisition entry for an untracked tv title on a search card.
- * Single season: one 获取 button. Multiple seasons: 获取所有季 plus a
- * season-picker dropdown for grabbing one specific season.
+ * Two-step acquisition entry for a tv title: the dropdown only SELECTS a
+ * scope (all remaining seasons, or one specific season) and rewrites the
+ * pill label; nothing is queued until the pill itself is pressed. Seasons
+ * that are already tracked are not offered — `seasonNumbers` must be the
+ * untracked ones.
  */
 export function SeasonRequestMenu({
   tmdbId,
   seasonNumbers,
+  allLabel = "获取所有季",
 }: {
   tmdbId: number;
+  /** Seasons still available to request (untracked only). */
   seasonNumbers: number[];
+  /** Pill label for the all-remaining scope. */
+  allLabel?: string;
 }) {
   const [isPending, startTransition] = useTransition();
   const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<number | "all">("all");
   const [result, setResult] = useState<RequestTrackingActionResult | null>(null);
   const isLocked =
     result?.status === "requested" ||
@@ -37,17 +44,14 @@ export function SeasonRequestMenu({
     );
   }
 
-  const requestAll = () => {
+  const submit = () => {
     startTransition(async () => {
       setOpen(false);
-      setResult(await requestRemainingAction({ tmdbId }));
-    });
-  };
-
-  const requestSeason = (seasonNumber: number) => {
-    startTransition(async () => {
-      setOpen(false);
-      setResult(await requestSeasonAction({ tmdbId, seasonNumber }));
+      setResult(
+        selected === "all"
+          ? await requestRemainingAction({ tmdbId })
+          : await requestSeasonAction({ tmdbId, seasonNumber: selected }),
+      );
     });
   };
 
@@ -58,7 +62,11 @@ export function SeasonRequestMenu({
         className="primary-button"
         type="button"
         disabled={isPending}
-        onClick={() => requestSeason(onlySeason)}
+        onClick={() => {
+          startTransition(async () => {
+            setResult(await requestSeasonAction({ tmdbId, seasonNumber: onlySeason }));
+          });
+        }}
       >
         {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Plus size={14} aria-hidden />}
         获取
@@ -68,14 +76,15 @@ export function SeasonRequestMenu({
 
   return (
     <div className="season-menu">
-      <button className="primary-button" type="button" disabled={isPending} onClick={requestAll}>
+      <button className="primary-button" type="button" disabled={isPending} onClick={submit}>
         {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Plus size={14} aria-hidden />}
-        获取所有季
+        {selected === "all" ? allLabel : `获取第 ${selected} 季`}
       </button>
       <button
         className="season-menu-toggle"
         type="button"
-        aria-label="选择要获取的季"
+        aria-label="选择获取范围"
+        aria-expanded={open}
         disabled={isPending}
         onClick={() => setOpen((value) => !value)}
       >
@@ -83,9 +92,36 @@ export function SeasonRequestMenu({
       </button>
       {open ? (
         <ul className="season-menu-list" role="menu">
+          <li role="none">
+            <button
+              role="menuitemradio"
+              aria-checked={selected === "all"}
+              type="button"
+              onClick={() => {
+                setSelected("all");
+                setOpen(false);
+              }}
+            >
+              {selected === "all" ? <Check size={13} aria-hidden /> : <span className="menu-spacer" />}
+              {allLabel}
+            </button>
+          </li>
           {seasonNumbers.map((seasonNumber) => (
             <li key={seasonNumber} role="none">
-              <button role="menuitem" type="button" onClick={() => requestSeason(seasonNumber)}>
+              <button
+                role="menuitemradio"
+                aria-checked={selected === seasonNumber}
+                type="button"
+                onClick={() => {
+                  setSelected(seasonNumber);
+                  setOpen(false);
+                }}
+              >
+                {selected === seasonNumber ? (
+                  <Check size={13} aria-hidden />
+                ) : (
+                  <span className="menu-spacer" />
+                )}
                 第 {seasonNumber} 季
               </button>
             </li>

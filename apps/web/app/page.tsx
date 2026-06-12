@@ -109,6 +109,9 @@ async function SearchSurface({ query }: { query: string }) {
                     trackedByTmdbId.get(candidate.tmdbId) ?? [],
                     candidate.seasonNumbers.length,
                   )}
+                  trackedSeasonNumbers={(trackedByTmdbId.get(candidate.tmdbId) ?? []).map(
+                    (state) => state.season.seasonNumber,
+                  )}
                   key={`${candidate.mediaType}_${candidate.tmdbId}`}
                 />
               ))}
@@ -168,11 +171,18 @@ function trackedSummaryLabel(states: TrackedSeasonState[], totalSeasonCount: num
 function CandidateCard({
   candidate,
   trackedLabel,
+  trackedSeasonNumbers,
 }: {
   candidate: SearchCandidateCard;
   trackedLabel: string | null;
+  trackedSeasonNumbers: number[];
 }) {
   const isTv = candidate.mediaType === "tv";
+  const trackedSet = new Set(trackedSeasonNumbers);
+  // Only seasons NOT yet tracked are offered as acquisition scopes.
+  const untrackedSeasons = candidate.seasonNumbers.filter(
+    (seasonNumber) => !trackedSet.has(seasonNumber),
+  );
   return (
     <article className="candidate-card">
       <Link className="candidate-poster" href={`/show/${candidate.tmdbId}?from=search`} aria-hidden tabIndex={-1}>
@@ -194,20 +204,33 @@ function CandidateCard({
             </p>
           </div>
           <div className="candidate-actions">
+            {isTv && untrackedSeasons.length > 0 ? (
+              <SeasonRequestMenu
+                tmdbId={candidate.tmdbId}
+                seasonNumbers={untrackedSeasons}
+                allLabel={
+                  trackedLabel !== null ? `获取剩余 ${untrackedSeasons.length} 季` : "获取所有季"
+                }
+              />
+            ) : null}
             {trackedLabel !== null ? (
-              <Link className="primary-button" href={`/show/${candidate.tmdbId}?from=search`}>
+              <Link
+                className={
+                  isTv && untrackedSeasons.length > 0 ? "secondary-button" : "primary-button"
+                }
+                href={`/show/${candidate.tmdbId}?from=search`}
+              >
                 查看详情
               </Link>
-            ) : isTv ? (
-              <SeasonRequestMenu tmdbId={candidate.tmdbId} seasonNumbers={candidate.seasonNumbers} />
-            ) : (
+            ) : null}
+            {!isTv && trackedLabel === null ? (
               <RequestTrackButton
                 candidateId={candidate.id}
                 actionState={candidate.action.state}
                 disabled={candidate.action.disabled}
                 label={candidate.action.label}
               />
-            )}
+            ) : null}
           </div>
         </div>
         <p className="candidate-overview">{candidate.overview}</p>
