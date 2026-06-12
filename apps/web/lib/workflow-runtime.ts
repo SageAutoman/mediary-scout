@@ -13,6 +13,7 @@ import {
   prepareTrackingTarget,
   queueTrackingInitialization,
   runQueuedType2Workflow,
+  runScheduledType3Monitoring,
   SQLiteWorkflowRepository,
   type AgentNodes,
   type MediaSearchCandidate,
@@ -106,6 +107,17 @@ export async function runNextQueuedWorkflow() {
     resourceProvider: getWorkerResourceProvider(),
     storage: getWorkerStorageExecutor(),
     agents: getAgentNodes(),
+  });
+}
+
+export async function runScheduledType3() {
+  const repository = getWorkflowRepository();
+  return runScheduledType3Monitoring({
+    repository,
+    resourceProvider: getWorkerResourceProvider(),
+    storage: getWorkerStorageExecutor(),
+    agents: getAgentNodes(),
+    staleActiveRunTimeoutMs: 30 * 60 * 1000,
   });
 }
 
