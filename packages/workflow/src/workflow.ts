@@ -347,6 +347,172 @@ export async function runType3Monitoring(input: {
   };
 }
 
+export interface SeriesInitializationSeasonResult {
+  season: TrackedSeason;
+  episodes: EpisodeState[];
+  obtainedEpisodes: string[];
+  providerAheadEpisodes: string[];
+}
+
+export interface SeriesInitializationResult {
+  status: WorkflowStatus;
+  showDirectoryId: string;
+  seasons: SeriesInitializationSeasonResult[];
+  resourceSnapshots: ResourceSnapshot[];
+  transferAttempts: TransferAttempt[];
+  decisions: AgentDecision[];
+  notification: NotificationEvent;
+  notifications: NotificationEvent[];
+  auditEvents: AuditEvent[];
+}
+
+/**
+ * Title-level initialization ("获取全剧"): one acquisition over the need set
+ * of every season — completed and airing alike. The planning agent sees the
+ * full multi-season missing list and may compose season packs, complete
+ * packs, mixed packs, and single episodes; the staging pipeline distributes
+ * whatever actually lands. Every season ends up tracked: completed seasons
+ * as `completed`, the airing season as `active` so Type 3 keeps monitoring,
+ * and uncovered seasons keep their missing episodes visible for retry.
+ */
+export async function runSeriesInitialization(input: {
+  title: MediaTitle;
+  seasons: AcquisitionSeasonScope[];
+  keyword: string;
+  storageParentDirectoryId: string;
+  resourceProvider: ResourceProvider;
+  storage: StorageExecutor;
+  agents: AgentNodes;
+  qualityPreference?: string;
+  workflowRunId?: string;
+  maxPlanningPasses?: number;
+}): Promise<SeriesInitializationResult> {
+  const workflowRunId = input.workflowRunId ?? "run_series_init";
+  const qualityPreference = input.qualityPreference ?? "4K";
+  const auditEvents: AuditEvent[] = [];
+
+  const showName = `${input.title.title} (${input.title.year})`;
+  const showDirectoryId = await input.storage.createDirectory({
+    name: showName,
+    parentId: input.storageParentDirectoryId,
+  });
+  auditEvents.push({
+    type: "landing_directory_created",
+    message: `Created canonical show directory ${showName}`,
+    data: { showDirectoryId },
+  });
+
+  const episodesBySeason = new Map<number, EpisodeState[]>();
+  for (const season of input.seasons) {
+    episodesBySeason.set(
+      season.seasonNumber,
+      createEpisodeStates({
+        trackedSeasonId: `${input.title.id}_s${season.seasonNumber}`,
+        seasonNumber: season.seasonNumber,
+        totalEpisodes: season.totalEpisodes,
+        latestAiredEpisode: season.latestAiredEpisode,
+      }),
+    );
+  }
+  const missingEpisodes = [...episodesBySeason.values()].flatMap((episodes) =>
+    actionableMissingEpisodes(episodes),
+  );
+
+  const seasonDirectoryIds: Record<number, string> = {};
+  const outcome =
+    missingEpisodes.length === 0
+      ? emptyAcquisitionOutcome()
+      : await acquireMissingEpisodes({
+          title: input.title,
+          seasons: input.seasons,
+          seasonDirectoryIds,
+          showDirectoryId,
+          stagingParentDirectoryId: showDirectoryId,
+          qualityPreference,
+          keyword: input.keyword,
+          missingEpisodes,
+          resourceProvider: input.resourceProvider,
+          storage: input.storage,
+          agents: input.agents,
+          workflowRunId,
+          auditEvents,
+          maxPlanningPasses: input.maxPlanningPasses ?? DEFAULT_MAX_PLANNING_PASSES,
+        });
+
+  // Every season in a series-initialization intent becomes tracked: ensure a
+  // canonical directory exists even when this run obtained nothing for it,
+  // so Type 3 can monitor and retry. This is standing tracking intent, not
+  // speculative pre-creation.
+  for (const season of input.seasons) {
+    seasonDirectoryIds[season.seasonNumber] ??= await input.storage.createDirectory({
+      name: `Season ${season.seasonNumber}`,
+      parentId: showDirectoryId,
+    });
+  }
+
+  const seasonResults: SeriesInitializationSeasonResult[] = [];
+  for (const seasonMeta of input.seasons) {
+    const storageDirectoryId = seasonDirectoryIds[seasonMeta.seasonNumber]!;
+    const season: TrackedSeason = {
+      id: `${input.title.id}_s${seasonMeta.seasonNumber}`,
+      mediaTitleId: input.title.id,
+      seasonNumber: seasonMeta.seasonNumber,
+      status: seasonMeta.latestAiredEpisode >= seasonMeta.totalEpisodes ? "completed" : "active",
+      qualityPreference,
+      storageDirectoryId,
+      totalEpisodes: seasonMeta.totalEpisodes,
+      latestAiredEpisode: seasonMeta.latestAiredEpisode,
+      latestAiredSource: "metadata",
+    };
+    const verifiedFiles = await dedupeLandingDirectory({
+      storage: input.storage,
+      directoryId: storageDirectoryId,
+      auditEvents,
+      title: input.title,
+      seasonNumber: seasonMeta.seasonNumber,
+      agents: input.agents,
+    });
+    const episodes = reconcileVerifiedFiles({
+      season,
+      episodes: episodesBySeason.get(seasonMeta.seasonNumber) ?? [],
+      files: verifiedFiles,
+    });
+    seasonResults.push({
+      season,
+      episodes,
+      obtainedEpisodes: obtainedEpisodeCodes(episodes),
+      providerAheadEpisodes: collectProviderAheadEpisodes(episodes),
+    });
+  }
+
+  const stillMissingAfter = seasonResults.flatMap((entry) => actionableMissingEpisodes(entry.episodes));
+  const status = resolveAcquisitionStatus({ missingBefore: missingEpisodes, stillMissingAfter });
+  const totalObtained = seasonResults.reduce((sum, entry) => sum + entry.obtainedEpisodes.length, 0);
+  const notification: NotificationEvent = {
+    id: `notification_${workflowRunId}`,
+    workflowRunId,
+    kind: status === "no_coverage" ? "no_coverage" : "series_initialized",
+    title:
+      status === "no_coverage"
+        ? `${input.title.title} no covering resource yet`
+        : `${input.title.title} series initialized`,
+    body: `${totalObtained} episodes obtained across ${seasonResults.length} seasons`,
+    createdAt: FIXED_CREATED_AT,
+  };
+
+  return {
+    status,
+    showDirectoryId,
+    seasons: seasonResults,
+    resourceSnapshots: outcome.resourceSnapshots,
+    transferAttempts: outcome.transferAttempts,
+    decisions: outcome.decisions,
+    notification,
+    notifications: [notification],
+    auditEvents,
+  };
+}
+
 interface AcquisitionOutcome {
   resourceSnapshots: ResourceSnapshot[];
   decisions: AgentDecision[];

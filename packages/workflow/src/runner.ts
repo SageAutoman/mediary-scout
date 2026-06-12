@@ -8,8 +8,11 @@ import type {
 import type { AgentNodes, ResourceProvider, StorageExecutor } from "./ports.js";
 import type { WorkflowRepository } from "./repository.js";
 import {
+  runSeriesInitialization,
   runType2Initialization,
   runType3Monitoring,
+  type AcquisitionSeasonScope,
+  type SeriesInitializationResult,
   type WorkflowResult,
 } from "./workflow.js";
 
@@ -125,4 +128,66 @@ function toWorkflowRun(
     finishedAt: metadata.finishedAt,
     auditEvents: result.auditEvents,
   };
+}
+
+export async function runSeriesInitializationAndPersist(input: {
+  title: MediaTitle;
+  seasons: AcquisitionSeasonScope[];
+  keyword: string;
+  storageParentDirectoryId: string;
+  resourceProvider: ResourceProvider;
+  storage: StorageExecutor;
+  agents: AgentNodes;
+  repository: WorkflowRepository;
+  workflowRun: WorkflowRunMetadata;
+  qualityPreference?: string;
+  maxPlanningPasses?: number;
+}): Promise<SeriesInitializationResult> {
+  const result = await runSeriesInitialization({
+    title: input.title,
+    seasons: input.seasons,
+    keyword: input.keyword,
+    storageParentDirectoryId: input.storageParentDirectoryId,
+    resourceProvider: input.resourceProvider,
+    storage: input.storage,
+    agents: input.agents,
+    workflowRunId: input.workflowRun.id,
+    ...(input.qualityPreference === undefined ? {} : { qualityPreference: input.qualityPreference }),
+    ...(input.maxPlanningPasses === undefined ? {} : { maxPlanningPasses: input.maxPlanningPasses }),
+  });
+
+  for (const [index, seasonResult] of result.seasons.entries()) {
+    const seasonRunId = `${input.workflowRun.id}_s${seasonResult.season.seasonNumber}`;
+    await input.repository.saveWorkflowRunSnapshot({
+      title: input.title,
+      season: seasonResult.season,
+      workflowRun: {
+        id: seasonRunId,
+        kind: "type1_package_init",
+        status: result.status,
+        trackedSeasonId: seasonResult.season.id,
+        startedAt: input.workflowRun.startedAt,
+        finishedAt: input.workflowRun.finishedAt,
+        auditEvents: result.auditEvents,
+      },
+      episodes: seasonResult.episodes,
+      // Resource evidence is attached once (first season) to avoid duplicating
+      // snapshots/decisions across N season records.
+      resourceSnapshots: index === 0 ? result.resourceSnapshots : [],
+      decisions: index === 0 ? result.decisions : [],
+      transferAttempts:
+        index === 0
+          ? result.transferAttempts.map((attempt) => ({ ...attempt, workflowRunId: seasonRunId }))
+          : [],
+      notifications: [
+        {
+          ...result.notification,
+          id: `notification_${seasonRunId}`,
+          workflowRunId: seasonRunId,
+        },
+      ],
+    });
+  }
+
+  return result;
 }
