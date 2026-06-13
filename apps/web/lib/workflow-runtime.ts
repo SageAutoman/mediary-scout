@@ -10,6 +10,7 @@ import {
   createNotifyChannelsFromEnv,
   createXiaomiMimoAgentNodesFromEnv,
   dispatchNotifications,
+  formatDailyDigestPushText,
   getTrackedSeasonStatusView,
   importForeignWorkAsMovie,
   assertWorkflowAgentAdapterPolicy,
@@ -25,6 +26,7 @@ import {
   type AgentNodes,
   type MediaSearchCandidate,
   type MediaTitle,
+  type NotificationEvent,
   type ResourceProvider,
   type StorageExecutor,
   type TrackedSeason,
@@ -154,18 +156,44 @@ async function pushNotificationsSince(
   sinceIso: string,
 ): Promise<void> {
   try {
-    const recent = (await targetRepository.listNotifications({ limit: 20 })).filter(
+    const recent = (await targetRepository.listNotifications({ limit: 50 })).filter(
       (notification) => notification.createdAt >= sinceIso,
     );
     if (recent.length === 0) {
       return;
     }
-    for (const notification of recent) {
+
+    // A scheduled sweep touches many shows; collapse its notifications into one
+    // digest push instead of one message per show. User-triggered events stay
+    // per-resource — each is its own message.
+    const scheduled = recent.filter((notification) => notification.trigger === "scheduled");
+    const individual = recent.filter((notification) => notification.trigger !== "scheduled");
+
+    for (const notification of individual) {
       try {
         await sendPushNotifications({ repository: targetRepository, notification });
       } catch (error) {
         console.error(
           `[media-track] push for ${notification.id} failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    if (scheduled.length > 0) {
+      const digest: NotificationEvent = {
+        id: `digest_${sinceIso}`,
+        workflowRunId: scheduled[0]!.workflowRunId,
+        kind: "daily_digest",
+        title: "每日巡检",
+        body: formatDailyDigestPushText(scheduled),
+        createdAt: new Date().toISOString(),
+        trigger: "scheduled",
+      };
+      try {
+        await sendPushNotifications({ repository: targetRepository, notification: digest });
+      } catch (error) {
+        console.error(
+          `[media-track] digest push failed: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }

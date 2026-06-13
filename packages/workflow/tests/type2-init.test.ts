@@ -91,7 +91,12 @@ describe("runType2Initialization", () => {
       obtained: false,
       airStatus: "unaired",
     });
-    expect(result.notification.body).toContain("14 episodes obtained");
+    // Airing season: obtained up to the latest aired episode; the unaired
+    // E15 is NOT a gap, so the report reads "airing" with no missing.
+    expect(result.notification.trigger).toBe("user");
+    expect(result.notification.report?.status).toBe("airing");
+    expect(result.notification.report?.realMissing).toEqual([]);
+    expect(result.notification.body).toContain("已获取至最新第 14 集");
     expect(result.notifications).toEqual([result.notification]);
   });
 

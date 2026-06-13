@@ -21,6 +21,11 @@ import {
   type PackageMoveAction,
 } from "./package-normalizer.js";
 import {
+  buildSeasonReport,
+  buildSeriesReport,
+  formatReportPushText,
+} from "./notification-report.js";
+import {
   deriveAgentDecision,
   validateAcquisitionPlan,
   type SelectedTransferCandidate,
@@ -160,24 +165,22 @@ export async function runType2Initialization(input: {
     missingBefore: missingEpisodes,
     stillMissingAfter: actionableMissingEpisodes(reconciledEpisodes),
   });
-  const notification: NotificationEvent =
-    status === "no_coverage"
-      ? {
-          id: `notification_${workflowRunId}`,
-          workflowRunId,
-          kind: "no_coverage",
-          title: `${input.title.title} no covering resource yet`,
-          body: `no covering resource found yet; ${obtainedEpisodes.length} episodes obtained`,
-          createdAt: now(),
-        }
-      : {
-          id: `notification_${workflowRunId}`,
-          workflowRunId,
-          kind: "tracking_initialized",
-          title: `${input.title.title} tracking initialized`,
-          body: `${obtainedEpisodes.length} episodes obtained`,
-          createdAt: now(),
-        };
+  const report = buildSeasonReport({
+    titleName: input.title.title,
+    season,
+    episodes: reconciledEpisodes,
+    noCoverage: status === "no_coverage",
+  });
+  const notification: NotificationEvent = {
+    id: `notification_${workflowRunId}`,
+    workflowRunId,
+    kind: status === "no_coverage" ? "no_coverage" : "tracking_initialized",
+    title: `${report.titleName} ${report.seasonLabel}`,
+    body: formatReportPushText(report),
+    createdAt: now(),
+    trigger: "user",
+    report,
+  };
 
   return {
     status,
@@ -283,21 +286,22 @@ export async function runType3Monitoring(input: {
   const missingBefore = actionableMissingEpisodes(episodes);
 
   if (missingBefore.length === 0) {
-    const obtainedCount = episodes.filter((ep) => ep.obtained).length;
+    const report = buildSeasonReport({
+      titleName: input.title.title,
+      season: input.season,
+      episodes,
+    });
     const notification: NotificationEvent = {
       id: `notification_${workflowRunId}_noop`,
       workflowRunId,
-      kind: "already_current",
-      title: `${input.title.title} 已是最新`,
-      body: formatType3Report({
-        titleName: input.title.title,
-        seasonNumber: input.season.seasonNumber,
-        totalEpisodes: input.season.totalEpisodes,
-        obtainedCount,
-        newlyObtainedCodes: [],
-        stillMissingCodes: [],
-      }),
+      // A no-op sweep that finds a finished, fully-obtained season is the
+      // moment it graduates to Type 1 — announce the finale, not "已是最新".
+      kind: report.status === "complete" ? "tracking_completed" : "already_current",
+      title: `${report.titleName} ${report.seasonLabel}`,
+      body: formatReportPushText(report),
       createdAt: now(),
+      trigger: "scheduled",
+      report,
     };
     return {
       status: "succeeded",
@@ -366,37 +370,31 @@ export async function runType3Monitoring(input: {
   const obtainedEpisodes = obtainedEpisodeCodes(episodes);
   const providerAheadEpisodes = collectProviderAheadEpisodes(episodes);
   const stillMissingAfter = actionableMissingEpisodes(episodes);
-  const restoredCount = missingBefore.length - stillMissingAfter.length;
   const missingBeforeCodes = new Set(missingBefore);
   const newlyObtained = episodes.filter((ep) => ep.obtained && missingBeforeCodes.has(ep.episodeCode));
-  const obtainedCount = episodes.filter((ep) => ep.obtained).length;
   const status = resolveAcquisitionStatus({ missingBefore, stillMissingAfter });
-  const reportBody = formatType3Report({
+  const report = buildSeasonReport({
     titleName: input.title.title,
-    seasonNumber: input.season.seasonNumber,
-    totalEpisodes: input.season.totalEpisodes,
-    obtainedCount,
-    newlyObtainedCodes: newlyObtained.map((ep) => ep.episodeCode),
-    stillMissingCodes: stillMissingAfter,
+    season: input.season,
+    episodes,
+    newlyObtained: newlyObtained.map((ep) => ep.episodeCode),
+    noCoverage: status === "no_coverage",
   });
-  const notification: NotificationEvent =
-    status === "no_coverage"
-      ? {
-          id: `notification_${workflowRunId}`,
-          workflowRunId,
-          kind: "no_coverage",
-          title: `${input.title.title} 暂无资源覆盖`,
-          body: reportBody,
-          createdAt: now(),
-        }
-      : {
-          id: `notification_${workflowRunId}`,
-          workflowRunId,
-          kind: "episodes_restored",
-          title: `${input.title.title} 第 ${input.season.seasonNumber} 季更新`,
-          body: reportBody,
-          createdAt: now(),
-        };
+  const notification: NotificationEvent = {
+    id: `notification_${workflowRunId}`,
+    workflowRunId,
+    kind:
+      status === "no_coverage"
+        ? "no_coverage"
+        : report.status === "complete"
+          ? "tracking_completed"
+          : "episodes_restored",
+    title: `${report.titleName} ${report.seasonLabel}`,
+    body: formatReportPushText(report),
+    createdAt: now(),
+    trigger: "scheduled",
+    report,
+  };
 
   return {
     status,
@@ -588,17 +586,20 @@ export async function runSeriesInitialization(input: {
 
   const stillMissingAfter = seasonResults.flatMap((entry) => actionableMissingEpisodes(entry.episodes));
   const status = resolveAcquisitionStatus({ missingBefore: missingEpisodes, stillMissingAfter });
-  const totalObtained = seasonResults.reduce((sum, entry) => sum + entry.obtainedEpisodes.length, 0);
+  const report = buildSeriesReport({
+    titleName: input.title.title,
+    seasons: seasonResults.map((entry) => ({ season: entry.season, episodes: entry.episodes })),
+    noCoverage: status === "no_coverage",
+  });
   const notification: NotificationEvent = {
     id: `notification_${workflowRunId}`,
     workflowRunId,
     kind: status === "no_coverage" ? "no_coverage" : "series_initialized",
-    title:
-      status === "no_coverage"
-        ? `${input.title.title} no covering resource yet`
-        : `${input.title.title} series initialized`,
-    body: `${totalObtained} episodes obtained across ${seasonResults.length} seasons`,
+    title: report.titleName,
+    body: formatReportPushText(report),
     createdAt: now(),
+    trigger: "user",
+    report,
   };
 
   return {
@@ -1219,42 +1220,3 @@ function collectProviderAheadEpisodes(episodes: EpisodeState[]): string[] {
     .map((episode) => episode.episodeCode);
 }
 
-/**
- * Format Type 3 monitoring report for end users: show title + new episodes +
- * status. Skip process details (steps, links, etc) — users only care about
- * what's updated and what's missing.
- */
-function formatType3Report(input: {
-  titleName: string;
-  seasonNumber: number;
-  totalEpisodes: number;
-  obtainedCount: number;
-  newlyObtainedCodes: string[];
-  stillMissingCodes: string[];
-}): string {
-  const parts: string[] = [];
-  parts.push(`📺 ${input.titleName} 第 ${input.seasonNumber} 季`);
-  parts.push("");
-
-  if (input.newlyObtainedCodes.length > 0) {
-    const codes = input.newlyObtainedCodes.map((code) => code.replace(/^S\d+/, "")).join("、");
-    parts.push(`✅ 新获取：${codes}`);
-  }
-
-  const isComplete = input.obtainedCount === input.totalEpisodes;
-  const statusLabel = isComplete
-    ? `已全部入库（${input.obtainedCount}/${input.totalEpisodes} 集）`
-    : input.stillMissingCodes.length === 0
-      ? `追更中（${input.obtainedCount}/${input.totalEpisodes} 集）`
-      : `部分入库（${input.obtainedCount}/${input.totalEpisodes} 集）`;
-  parts.push(`📊 状态：${statusLabel}`);
-
-  if (input.stillMissingCodes.length > 0 && !isComplete) {
-    const missingCodes = input.stillMissingCodes
-      .map((code) => code.replace(/^S\d+/, ""))
-      .join("、");
-    parts.push(`🔴 缺集：${missingCodes}`);
-  }
-
-  return parts.join("\n");
-}

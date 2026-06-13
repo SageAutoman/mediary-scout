@@ -105,6 +105,7 @@ export async function queueTrackingInitialization(input: {
     transferAttempts: [],
     notifications: [],
     blockIfEpisodeStatesExist: true,
+    blockIfTitleHasActiveRun: true,
     ...(staleActiveRunStartedBefore
       ? {
           staleActiveRunStartedBefore,
@@ -231,6 +232,7 @@ export async function requestTrackingInitialization(input: {
     transferAttempts: [],
     notifications: [],
     blockIfEpisodeStatesExist: true,
+    blockIfTitleHasActiveRun: true,
     ...(staleActiveRunStartedBefore
       ? {
           staleActiveRunStartedBefore,
@@ -416,6 +418,7 @@ export async function queueSeriesInitialization(input: {
     transferAttempts: [],
     notifications: [],
     blockIfEpisodeStatesExist: true,
+    blockIfTitleHasActiveRun: true,
     ...(staleActiveRunStartedBefore
       ? { staleActiveRunStartedBefore, staleFinishedAt: queuedAt }
       : {}),

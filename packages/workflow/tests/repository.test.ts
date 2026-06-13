@@ -395,6 +395,101 @@ describe("InMemoryWorkflowRepository", () => {
     });
   });
 
+  it("blocks a second acquisition for the same title under the title lock, across season and kind", async () => {
+    const repository = new InMemoryWorkflowRepository();
+    // An active Type 2 run for season 1 of title_1.
+    const seasonOneRun = workflowPersistenceFixture({
+      workflowRun: {
+        ...workflowPersistenceFixture().workflowRun,
+        id: "run_s1",
+        kind: "type2_init",
+        status: "running",
+        finishedAt: null,
+      },
+      resourceSnapshots: [],
+      decisions: [],
+      transferAttempts: [],
+      notifications: [],
+    });
+    await repository.saveWorkflowRunSnapshot(seasonOneRun);
+
+    // Second click: season 2 of the SAME title — different season id AND a
+    // different kind (series init). The old per-(season,kind) lock would miss
+    // this entirely; the title lock must catch it.
+    const seasonTwo: TrackedSeason = { ...seasonOneRun.season, id: "season_2", seasonNumber: 2 };
+    await expect(
+      repository.reserveWorkflowRun({
+        title: seasonOneRun.title,
+        season: seasonTwo,
+        workflowRun: {
+          id: "run_s2",
+          kind: "type1_package_init",
+          status: "queued",
+          trackedSeasonId: seasonTwo.id,
+          startedAt: "2026-06-11T02:00:00.000Z",
+          finishedAt: null,
+          auditEvents: [],
+        },
+        episodes: [],
+        resourceSnapshots: [],
+        decisions: [],
+        transferAttempts: [],
+        notifications: [],
+        blockIfTitleHasActiveRun: true,
+      }),
+    ).resolves.toMatchObject({
+      status: "already_active",
+      snapshot: { workflowRun: { id: "run_s1" } },
+    });
+    await expect(repository.getWorkflowRunSnapshot("run_s2")).resolves.toBeNull();
+  });
+
+  it("does not block a different title under the title lock", async () => {
+    const repository = new InMemoryWorkflowRepository();
+    await repository.saveWorkflowRunSnapshot(
+      workflowPersistenceFixture({
+        workflowRun: {
+          ...workflowPersistenceFixture().workflowRun,
+          id: "run_s1",
+          status: "running",
+          finishedAt: null,
+        },
+        resourceSnapshots: [],
+        decisions: [],
+        transferAttempts: [],
+        notifications: [],
+      }),
+    );
+
+    const otherTitle: MediaTitle = { ...workflowPersistenceFixture().title, id: "title_2", tmdbId: 200 };
+    const otherSeason: TrackedSeason = {
+      ...workflowPersistenceFixture().season,
+      id: "season_t2",
+      mediaTitleId: otherTitle.id,
+    };
+    await expect(
+      repository.reserveWorkflowRun({
+        title: otherTitle,
+        season: otherSeason,
+        workflowRun: {
+          id: "run_other",
+          kind: "type2_init",
+          status: "queued",
+          trackedSeasonId: otherSeason.id,
+          startedAt: "2026-06-11T02:00:00.000Z",
+          finishedAt: null,
+          auditEvents: [],
+        },
+        episodes: [],
+        resourceSnapshots: [],
+        decisions: [],
+        transferAttempts: [],
+        notifications: [],
+        blockIfTitleHasActiveRun: true,
+      }),
+    ).resolves.toMatchObject({ status: "reserved" });
+  });
+
   it("expires stale active workflow runs during reservation", async () => {
     const repository = new InMemoryWorkflowRepository();
     const stale = workflowPersistenceFixture({

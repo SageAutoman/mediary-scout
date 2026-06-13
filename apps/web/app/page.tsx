@@ -1,12 +1,19 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { CheckCircle2, Clock3, Library, Search, TriangleAlert } from "lucide-react";
+import { CheckCircle2, Clock3, Library, LoaderCircle, Search, TriangleAlert } from "lucide-react";
+import { AcquiringPoller } from "../components/acquiring-poller";
 import { AppSidebar } from "../components/app-sidebar";
 import { RequestTrackButton } from "../components/request-track-button";
 import { RememberQuery } from "../components/search-memory";
 import { SeasonRequestMenu } from "../components/season-request-menu";
 import { getSearchView } from "../lib/search-page";
-import { getLibraryWall, type LibraryWallEntry } from "../lib/title-hub";
+import {
+  getInProgressTitles,
+  getLibraryWall,
+  getLibraryTypeCounts,
+  type InProgressTitle,
+  type LibraryWallEntry,
+} from "../lib/title-hub";
 import { ensureDemoSeeded, getWorkflowRepository } from "../lib/workflow-runtime";
 import type { SearchCandidateCard, TrackedSeasonState } from "@media-track/workflow";
 
@@ -18,24 +25,14 @@ export default async function Page({
   const params = (await searchParams) ?? {};
   const query = stringParam(params.q);
   const activeTab = stringParam(params.tab) === "library" ? "library" : "search";
+  const mediaType = stringParam(params.type) || "all";
+  const filter = stringParam(params.filter) || "all";
 
   return (
     <div className="app-shell">
       <AppSidebar active={activeTab} searchQuery={query} />
 
       <main className="main product-main">
-        <div className="product-tabs" role="tablist" aria-label="媒体工作区">
-          <Link className={activeTab === "search" ? "is-active" : ""} href={`/?tab=search&q=${encodeURIComponent(query)}`}>
-            搜索获取
-          </Link>
-          <Link
-            className={activeTab === "library" ? "is-active" : ""}
-            href={`/?tab=library&q=${encodeURIComponent(query)}`}
-          >
-            我的媒体库
-          </Link>
-        </div>
-
         {activeTab === "search" ? (
           <section className="search-surface">
             <RememberQuery query={query} />
@@ -62,7 +59,7 @@ export default async function Page({
           </section>
         ) : (
           <Suspense fallback={<LibrarySurfaceSkeleton />}>
-            <LibrarySurface />
+            <LibrarySurface mediaType={mediaType} filter={filter} />
           </Suspense>
         )}
       </main>
@@ -253,10 +250,13 @@ function CandidateCard({
   );
 }
 
-async function LibrarySurface() {
-  const wall = await getLibraryWall();
+async function LibrarySurface({ mediaType, filter }: { mediaType: string; filter: string }) {
+  const [rawWall, inProgress] = await Promise.all([getLibraryWall(), getInProgressTitles()]);
+  const inProgressIds = new Set(inProgress.map((title) => title.tmdbId));
+  // A title still being fetched shows as a 获取中 placeholder, not (yet) a card.
+  const wall = rawWall.filter((entry) => !inProgressIds.has(entry.tmdbId));
 
-  if (wall.length === 0) {
+  if (wall.length === 0 && inProgress.length === 0) {
     return (
       <section className="library-surface">
         <div className="quiet-state">
@@ -268,20 +268,179 @@ async function LibrarySurface() {
     );
   }
 
+  const typeCounts = getLibraryTypeCounts(wall);
+
+  // Homepage: show all categories with horizontal rows
+  if (mediaType === "all") {
+    const movieWall = wall.filter((entry) => entry.type === "movie");
+    const tvWall = wall.filter((entry) => entry.type === "tv");
+    const animeWall = wall.filter((entry) => entry.type === "anime");
+
+    return (
+      <section className="library-surface">
+        <div className="section-heading library-heading">
+          <div>
+            <h1>我的媒体库</h1>
+          </div>
+        </div>
+
+        {inProgress.length > 0 ? <AcquiringPoller /> : null}
+        <InProgressRow titles={inProgress} />
+
+        {typeCounts.movie > 0 && (
+          <div className="category-section">
+            <Link className="category-header" href="/?tab=library&type=movie&filter=all">
+              <h2>电影 {typeCounts.movie}</h2>
+              <span className="category-arrow">›</span>
+            </Link>
+            <div className="poster-row">
+              {movieWall.map((entry) => (
+                <PosterCard entry={entry} key={entry.tmdbId} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {typeCounts.tv > 0 && (
+          <div className="category-section">
+            <Link className="category-header" href="/?tab=library&type=tv&filter=all">
+              <h2>电视剧 {typeCounts.tv}</h2>
+              <span className="category-arrow">›</span>
+            </Link>
+            <div className="poster-row">
+              {tvWall.map((entry) => (
+                <PosterCard entry={entry} key={entry.tmdbId} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {typeCounts.anime > 0 && (
+          <div className="category-section">
+            <Link className="category-header" href="/?tab=library&type=anime&filter=all">
+              <h2>动漫 {typeCounts.anime}</h2>
+              <span className="category-arrow">›</span>
+            </Link>
+            <div className="poster-row">
+              {animeWall.map((entry) => (
+                <PosterCard entry={entry} key={entry.tmdbId} />
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  // Category detail page
+  const filteredWall = wall.filter((entry) => {
+    // Type filter
+    if (mediaType === "movie" && entry.type !== "movie") return false;
+    if (mediaType === "tv" && entry.type !== "tv") return false;
+    if (mediaType === "anime" && entry.type !== "anime") return false;
+    // State filter
+    if (filter === "complete") return entry.state === "complete";
+    if (filter === "tracking") return entry.state === "tracking";
+    if (filter === "partial") return entry.state === "partial";
+    return true;
+  });
+
+  const typeLabel = mediaType === "movie" ? "电影" : mediaType === "tv" ? "电视剧" : "动漫";
+  const trackingCount = wall
+    .filter((entry) => entry.type === mediaType)
+    .filter((entry) => entry.state === "tracking" || entry.state === "partial").length;
+
   return (
     <section className="library-surface">
       <div className="section-heading library-heading">
         <div>
-          <h1>我的媒体库</h1>
-          <p>{wall.length} 部剧正在自动追踪</p>
+          <h1>
+            <Link href="/?tab=library" style={{ marginRight: 12, opacity: 0.6 }}>
+              ‹
+            </Link>
+            {typeLabel}
+          </h1>
+          <p>{trackingCount > 0 && `${trackingCount} 部正在追踪`}</p>
         </div>
       </div>
+
+      <div style={{ marginBottom: 16, display: "flex", gap: 8 }}>
+        <Link
+          className={`filter-pill ${filter === "all" ? "is-active" : ""}`}
+          href={`/?tab=library&type=${mediaType}&filter=all`}
+        >
+          全部
+        </Link>
+        <Link
+          className={`filter-pill ${filter === "complete" ? "is-active" : ""}`}
+          href={`/?tab=library&type=${mediaType}&filter=complete`}
+        >
+          已完结
+        </Link>
+        <Link
+          className={`filter-pill ${filter === "tracking" ? "is-active" : ""}`}
+          href={`/?tab=library&type=${mediaType}&filter=tracking`}
+        >
+          追更中
+        </Link>
+        <Link
+          className={`filter-pill ${filter === "partial" ? "is-active" : ""}`}
+          href={`/?tab=library&type=${mediaType}&filter=partial`}
+        >
+          有缺集
+        </Link>
+      </div>
+
+      {inProgress.length > 0 ? <AcquiringPoller /> : null}
+      <InProgressRow titles={inProgress.filter((title) => title.type === mediaType)} />
+
       <div className="poster-wall">
-        {wall.map((entry) => (
+        {filteredWall.map((entry) => (
           <PosterCard entry={entry} key={entry.tmdbId} />
         ))}
       </div>
     </section>
+  );
+}
+
+function InProgressRow({ titles }: { titles: InProgressTitle[] }) {
+  if (titles.length === 0) {
+    return null;
+  }
+  return (
+    <div className="category-section">
+      <div className="category-header is-static">
+        <h2>获取中 {titles.length}</h2>
+      </div>
+      <div className="poster-row">
+        {titles.map((title) => (
+          <InProgressCard title={title} key={title.tmdbId} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function InProgressCard({ title }: { title: InProgressTitle }) {
+  return (
+    <div className="wall-card is-loading" aria-disabled title="获取中，完成后可进入">
+      <span className="wall-poster">
+        {title.posterPath ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={`https://image.tmdb.org/t/p/w342${title.posterPath}`} alt="" loading="lazy" />
+        ) : (
+          <span className="poster-fallback">{title.title.slice(0, 4)}</span>
+        )}
+        <span className="wall-loading-overlay">
+          <LoaderCircle size={20} className="spin" aria-hidden />
+          <span>获取中</span>
+        </span>
+      </span>
+      <span className="wall-copy">
+        <strong>{title.title}</strong>
+        <span>{title.year} · 正在获取</span>
+      </span>
+    </div>
   );
 }
 

@@ -42,6 +42,8 @@ export interface TitleHubView {
   aggregate: TitleAggregateState;
   seasons: TitleHubSeason[];
   untrackedSeasonNumbers: number[];
+  /** A queued/running acquisition for this title — disables all acquire buttons. */
+  acquiring: boolean;
 }
 
 const SERIES_TARGET_TTL_MS = 6 * 60 * 60 * 1000;
@@ -179,12 +181,17 @@ export async function getTitleHubView(tmdbId: number): Promise<TitleHubView | nu
         ? "tracking"
         : "complete";
 
+  const acquiring = (await repository.listActiveWorkflowRuns()).some(
+    (snapshot) => snapshot.title.tmdbId === tmdbId,
+  );
+
   return {
     tmdbId,
     ...meta,
     aggregate,
     seasons,
     untrackedSeasonNumbers,
+    acquiring,
   };
 }
 
@@ -242,11 +249,18 @@ export interface LibraryWallEntry {
   tmdbId: number;
   title: string;
   year: number;
+  type: "movie" | "tv" | "anime";
   posterPath: string | null;
   seasonCount: number;
   obtainedEpisodes: number;
   totalAiredEpisodes: number;
-  state: "tracking" | "complete" | "missing";
+  state: "tracking" | "complete" | "partial";
+}
+
+export interface LibraryTypeCounts {
+  movie: number;
+  tv: number;
+  anime: number;
 }
 
 /** Poster-wall view of every tracked title. */
@@ -256,9 +270,6 @@ export async function getLibraryWall(): Promise<LibraryWallEntry[]> {
   const states = await repository.listTrackedSeasonStates();
   const byTitle = new Map<number, typeof states>();
   for (const state of states) {
-    if (state.title.type !== "tv") {
-      continue;
-    }
     const list = byTitle.get(state.title.tmdbId) ?? [];
     list.push(state);
     byTitle.set(state.title.tmdbId, list);
@@ -287,12 +298,59 @@ export async function getLibraryWall(): Promise<LibraryWallEntry[]> {
       tmdbId,
       title: title.title,
       year: title.year,
+      type: title.type,
       posterPath,
       seasonCount: titleStates.length,
       obtainedEpisodes: obtained,
       totalAiredEpisodes: aired,
-      state: obtained < aired ? "missing" : anyActive ? "tracking" : "complete",
+      state: obtained < aired ? "partial" : anyActive ? "tracking" : "complete",
     });
   }
   return entries.sort((a, b) => a.title.localeCompare(b.title, "zh-Hans-CN"));
+}
+
+export interface InProgressTitle {
+  tmdbId: number;
+  title: string;
+  year: number;
+  type: "movie" | "tv" | "anime";
+  posterPath: string | null;
+}
+
+/**
+ * Titles with an acquisition run still queued/running — they surface in the
+ * library as non-clickable "获取中" poster placeholders until the run finishes
+ * and the title materializes as a real card.
+ */
+export async function getInProgressTitles(): Promise<InProgressTitle[]> {
+  const repository = getWorkflowRepository();
+  const active = await repository.listActiveWorkflowRuns();
+  const byTmdb = new Map<number, InProgressTitle>();
+  for (const snapshot of active) {
+    const title = snapshot.title;
+    if (byTmdb.has(title.tmdbId)) {
+      continue;
+    }
+    let posterPath = title.posterPath ?? null;
+    if (posterPath === null) {
+      posterPath = (await seriesTargetFor(title.tmdbId))?.title.posterPath ?? null;
+    }
+    byTmdb.set(title.tmdbId, {
+      tmdbId: title.tmdbId,
+      title: title.title,
+      year: title.year,
+      type: title.type,
+      posterPath,
+    });
+  }
+  return [...byTmdb.values()];
+}
+
+/** Get count of each media type in the library. */
+export function getLibraryTypeCounts(entries: LibraryWallEntry[]): LibraryTypeCounts {
+  return {
+    movie: entries.filter((entry) => entry.type === "movie").length,
+    tv: entries.filter((entry) => entry.type === "tv").length,
+    anime: entries.filter((entry) => entry.type === "anime").length,
+  };
 }

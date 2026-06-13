@@ -35,6 +35,16 @@ export interface TrackedSeasonState {
 
 export interface ReserveWorkflowRunInput extends PersistWorkflowRunSnapshotInput {
   blockIfEpisodeStatesExist?: boolean;
+  /**
+   * Title-level mutual exclusion: refuse the reservation if ANY run for the
+   * same media title is already active, regardless of season or kind. All
+   * seasons of a title share one `Title (Year)/` show directory and staging
+   * parent, so two concurrent acquisition runs would race on directory
+   * creation, staging, and dedup. User-triggered acquisitions set this so a
+   * user clicking "get S1", "get S2", "get S3" in quick succession can never
+   * spawn overlapping writers on the same title.
+   */
+  blockIfTitleHasActiveRun?: boolean;
   staleActiveRunStartedBefore?: string;
   staleFinishedAt?: string;
 }
@@ -65,6 +75,8 @@ export interface WorkflowRepository {
     trackedSeasonId: string;
     kind: WorkflowKind;
   }): Promise<PersistedWorkflowRunSnapshot | null>;
+  /** Every queued/running run, newest first — drives the library "获取中" placeholders. */
+  listActiveWorkflowRuns(): Promise<PersistedWorkflowRunSnapshot[]>;
   getTrackedSeasonState(trackedSeasonId: string): Promise<TrackedSeasonState | null>;
   listTrackedSeasonStates(): Promise<TrackedSeasonState[]>;
   listEpisodeStates(trackedSeasonId: string): Promise<EpisodeState[]>;
@@ -100,6 +112,22 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
     const snapshot = workflowSnapshotFromReservation(input);
     validateWorkflowRunSnapshot(snapshot);
     this.expireStaleActiveWorkflowRuns(input);
+
+    if (input.blockIfTitleHasActiveRun === true) {
+      const titleActive = Array.from(this.workflowRuns.values())
+        .filter(
+          (stored) =>
+            stored.season.mediaTitleId === snapshot.season.mediaTitleId &&
+            isActiveWorkflowStatus(stored.workflowRun.status),
+        )
+        .sort((a, b) => b.workflowRun.startedAt.localeCompare(a.workflowRun.startedAt))[0];
+      if (titleActive) {
+        return {
+          status: "already_active",
+          snapshot: withDerivedEpisodeSummaries(cloneWorkflowValue(titleActive)),
+        };
+      }
+    }
 
     const activeRun = await this.findActiveWorkflowRun({
       trackedSeasonId: snapshot.season.id,
@@ -173,6 +201,13 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
       .sort((a, b) => b.workflowRun.startedAt.localeCompare(a.workflowRun.startedAt));
     const latest = activeRuns[0];
     return latest ? withDerivedEpisodeSummaries(cloneWorkflowValue(latest)) : null;
+  }
+
+  async listActiveWorkflowRuns(): Promise<PersistedWorkflowRunSnapshot[]> {
+    return Array.from(this.workflowRuns.values())
+      .filter((snapshot) => isActiveWorkflowStatus(snapshot.workflowRun.status))
+      .sort((a, b) => b.workflowRun.startedAt.localeCompare(a.workflowRun.startedAt))
+      .map((snapshot) => withDerivedEpisodeSummaries(cloneWorkflowValue(snapshot)));
   }
 
   async getTrackedSeasonState(trackedSeasonId: string): Promise<TrackedSeasonState | null> {

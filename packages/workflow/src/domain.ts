@@ -139,6 +139,39 @@ export interface VerifiedFile {
   providerFileId: string;
 }
 
+/** Where a notification's run was triggered from — drives feed grouping. */
+export type NotificationTrigger = "user" | "scheduled";
+
+/**
+ * Semantic state of an acquisition, surfaced to the user without the internal
+ * Type 1/2/3 taxonomy. Crucially, `partial` means an AIRED episode is still
+ * missing — unaired episodes never make a report look incomplete.
+ */
+export type NotificationReportStatus =
+  | "complete" // completed series/season, fully obtained — graduated, no longer tracking
+  | "acquired" // movie / one-off fully acquired
+  | "airing" // still airing; obtained up to the latest aired episode, future auto-tracked
+  | "partial" // a genuine aired gap remains
+  | "no_coverage"; // nothing found yet
+
+/**
+ * Structured acquisition report. The single source of wording: the web feed
+ * renders it as native UI (status pill + chips) and the push channels render it
+ * as emoji text — both are pure functions of this object.
+ */
+export interface NotificationReport {
+  titleName: string;
+  /** "第 1 季" for a single season; null for a whole-series rollup or a movie. */
+  seasonLabel: string | null;
+  status: NotificationReportStatus;
+  /** 1–2 concise summary lines, e.g. ["已获取至最新第 12 集 · 后续更新自动追踪"]. */
+  lines: string[];
+  /** Episodes obtained THIS run (the daily-sweep additions). */
+  newlyObtained: string[];
+  /** Aired-but-not-obtained genuine gaps. Never includes unaired episodes. */
+  realMissing: string[];
+}
+
 export interface NotificationEvent {
   id: string;
   workflowRunId: string;
@@ -146,6 +179,9 @@ export interface NotificationEvent {
   title: string;
   body: string;
   createdAt: string;
+  /** Absent on legacy/foreign-work events; generators set it going forward. */
+  trigger?: NotificationTrigger;
+  report?: NotificationReport;
 }
 
 export function episodeCode(seasonNumber: number, episodeNumber: number): string {

@@ -1,6 +1,8 @@
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { TriangleAlert } from "lucide-react";
+import { AcquiringPoller } from "../../../components/acquiring-poller";
+import { AcquisitionLockProvider } from "../../../components/acquisition-lock";
 import { AppSidebar } from "../../../components/app-sidebar";
 import { BackLink } from "../../../components/back-link";
 import {
@@ -63,6 +65,8 @@ async function TitleHub({ params }: { params: Promise<{ tmdbId: string }> }) {
 
   const badge = aggregateBadge[view.aggregate];
   return (
+    <AcquisitionLockProvider>
+    {view.acquiring ? <AcquiringPoller /> : null}
     <section className="title-hub">
       {view.backdropPath ? (
         <div
@@ -101,6 +105,7 @@ async function TitleHub({ params }: { params: Promise<{ tmdbId: string }> }) {
             {view.untrackedSeasonNumbers.length > 0 && view.seasons.length > 1 ? (
               <RequestRemainingButton
                 tmdbId={view.tmdbId}
+                titleAcquiring={view.acquiring}
                 label={
                   view.aggregate === "untracked"
                     ? "获取所有季"
@@ -121,15 +126,29 @@ async function TitleHub({ params }: { params: Promise<{ tmdbId: string }> }) {
         </div>
         <ul className="hub-season-list">
           {view.seasons.map((season) => (
-            <SeasonRow key={season.seasonNumber} season={season} tmdbId={view.tmdbId} />
+            <SeasonRow
+              key={season.seasonNumber}
+              season={season}
+              tmdbId={view.tmdbId}
+              acquiring={view.acquiring}
+            />
           ))}
         </ul>
       </section>
     </section>
+    </AcquisitionLockProvider>
   );
 }
 
-function SeasonRow({ season, tmdbId }: { season: TitleHubSeason; tmdbId: number }) {
+function SeasonRow({
+  season,
+  tmdbId,
+  acquiring,
+}: {
+  season: TitleHubSeason;
+  tmdbId: number;
+  acquiring: boolean;
+}) {
   const aired = Math.min(season.latestAiredEpisode, season.totalEpisodes);
   const percent = aired > 0 ? Math.round((season.obtainedCount / aired) * 100) : 0;
 
@@ -163,7 +182,11 @@ function SeasonRow({ season, tmdbId }: { season: TitleHubSeason; tmdbId: number 
     return (
       <li className="hub-season-row untracked">
         {rowBody}
-        <RequestSeasonButton tmdbId={tmdbId} seasonNumber={season.seasonNumber} />
+        <RequestSeasonButton
+          tmdbId={tmdbId}
+          seasonNumber={season.seasonNumber}
+          titleAcquiring={acquiring}
+        />
       </li>
     );
   }

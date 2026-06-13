@@ -94,7 +94,11 @@ describe("runSeriesInitialization", () => {
     expect(s1Files.map((item) => item.episodeCode).sort()).toEqual(["S01E01", "S01E02"]);
     const auditTypes = result.auditEvents.map((event) => event.type);
     expect(auditTypes).toContain("acquisition_plan_created");
-    expect(result.notification.body).toContain("4");
+    // Mixed coverage: season 1 finished and complete, season 2 still airing.
+    expect(result.notification.trigger).toBe("user");
+    expect(result.notification.report?.status).toBe("airing");
+    expect(result.notification.body).toContain("第 1 季已完整获取");
+    expect(result.notification.body).toContain("第 2 季");
   });
 
   it("persists one tracked season per season and keeps the airing season active for type3", async () => {

@@ -369,6 +369,52 @@ describe("SQLiteWorkflowRepository", () => {
     });
   });
 
+  it("blocks a second acquisition for the same title under the title lock, across season and kind", async () => {
+    database = new DatabaseSync(":memory:");
+    const repository = new SQLiteWorkflowRepository(database);
+    const seasonOneRun = workflowPersistenceFixture({
+      workflowRun: {
+        ...workflowPersistenceFixture().workflowRun,
+        id: "run_s1",
+        kind: "type2_init",
+        status: "running",
+        finishedAt: null,
+      },
+      resourceSnapshots: [],
+      decisions: [],
+      transferAttempts: [],
+      notifications: [],
+    });
+    await repository.saveWorkflowRunSnapshot(seasonOneRun);
+
+    const seasonTwo: TrackedSeason = { ...seasonOneRun.season, id: "season_2", seasonNumber: 2 };
+    await expect(
+      repository.reserveWorkflowRun({
+        title: seasonOneRun.title,
+        season: seasonTwo,
+        workflowRun: {
+          id: "run_s2",
+          kind: "type1_package_init",
+          status: "queued",
+          trackedSeasonId: seasonTwo.id,
+          startedAt: "2026-06-11T02:00:00.000Z",
+          finishedAt: null,
+          auditEvents: [],
+        },
+        episodes: [],
+        resourceSnapshots: [],
+        decisions: [],
+        transferAttempts: [],
+        notifications: [],
+        blockIfTitleHasActiveRun: true,
+      }),
+    ).resolves.toMatchObject({
+      status: "already_active",
+      snapshot: { workflowRun: { id: "run_s1" } },
+    });
+    await expect(repository.getWorkflowRunSnapshot("run_s2")).resolves.toBeNull();
+  });
+
   it("expires stale active workflow runs during reservation", async () => {
     database = new DatabaseSync(":memory:");
     const repository = new SQLiteWorkflowRepository(database);

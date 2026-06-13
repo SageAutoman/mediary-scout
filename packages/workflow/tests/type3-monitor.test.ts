@@ -157,7 +157,9 @@ describe("runType3Monitoring", () => {
     expect(result.resourceSnapshots.map((snapshot) => snapshot.id)).toEqual(["snapshot_1", "snapshot_2"]);
     expect(result.obtainedEpisodes).toContain("S01E13");
     expect(result.obtainedEpisodes).toContain("S01E14");
-    expect(result.notification.body).toContain("新获取：E13、E14");
+    expect(result.notification.trigger).toBe("scheduled");
+    expect(result.notification.report?.newlyObtained).toEqual(expect.arrayContaining(["E13", "E14"]));
+    expect(result.notification.body).toContain("本次新增：E13、E14");
     expect(result.notification.body).toContain("📺 翘楚 第 1 季");
     expect(result.notifications).toEqual([result.notification]);
     expect(result.auditEvents.map((event) => event.type)).toContain("acquisition_pass_incomplete");
@@ -463,7 +465,8 @@ describe("runType3Monitoring", () => {
     expect(result.transferAttempts).toEqual([]);
     expect(result.notification.kind).toBe("no_coverage");
     expect(result.notification.body).toContain("📺 翘楚 第 1 季");
-    expect(result.notification.body).toContain("状态：");
+    expect(result.notification.report?.status).toBe("no_coverage");
+    expect(result.notification.body).toContain("暂未找到可用资源");
     expect(result.auditEvents.map((event) => event.type)).toContain("acquisition_no_coverage");
   });
 });

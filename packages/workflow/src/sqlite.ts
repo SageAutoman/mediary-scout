@@ -128,6 +128,24 @@ export class SQLiteWorkflowRepository implements WorkflowRepository {
     try {
       this.expireStaleActiveWorkflowRuns(input);
 
+      if (input.blockIfTitleHasActiveRun === true) {
+        const titleActive = this.selectWorkflowRunsForTitle(snapshot.season.mediaTitleId)
+          .filter((workflowRun) => isActiveWorkflowStatus(workflowRun.status))
+          .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+        if (titleActive) {
+          this.database.exec("COMMIT");
+          committed = true;
+          const activeSnapshot = await this.getWorkflowRunSnapshot(titleActive.id);
+          if (!activeSnapshot) {
+            throw new Error(`Missing active workflow run ${titleActive.id}`);
+          }
+          return {
+            status: "already_active",
+            snapshot: activeSnapshot,
+          };
+        }
+      }
+
       const activeRun = this.selectWorkflowRuns(snapshot.season.id)
         .filter(
           (workflowRun) =>
@@ -265,6 +283,20 @@ export class SQLiteWorkflowRepository implements WorkflowRepository {
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
     const latest = workflowRuns[0];
     return latest ? this.getWorkflowRunSnapshot(latest.id) : null;
+  }
+
+  async listActiveWorkflowRuns(): Promise<PersistedWorkflowRunSnapshot[]> {
+    const runs = this.selectPayloads<WorkflowRun>("SELECT payload FROM workflow_runs")
+      .filter((workflowRun) => isActiveWorkflowStatus(workflowRun.status))
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    const snapshots: PersistedWorkflowRunSnapshot[] = [];
+    for (const run of runs) {
+      const snapshot = await this.getWorkflowRunSnapshot(run.id);
+      if (snapshot) {
+        snapshots.push(snapshot);
+      }
+    }
+    return snapshots;
   }
 
   async getTrackedSeasonState(trackedSeasonId: string): Promise<TrackedSeasonState | null> {
@@ -451,6 +483,15 @@ export class SQLiteWorkflowRepository implements WorkflowRepository {
     return this.selectPayloads<WorkflowRun>(
       "SELECT payload FROM workflow_runs WHERE tracked_season_id = ?",
       trackedSeasonId,
+    );
+  }
+
+  private selectWorkflowRunsForTitle(mediaTitleId: string): WorkflowRun[] {
+    return this.selectPayloads<WorkflowRun>(
+      "SELECT wr.payload AS payload FROM workflow_runs wr " +
+        "JOIN tracked_seasons ts ON wr.tracked_season_id = ts.id " +
+        "WHERE ts.media_title_id = ?",
+      mediaTitleId,
     );
   }
 
