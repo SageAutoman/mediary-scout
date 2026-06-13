@@ -45,7 +45,7 @@ if (!args.tmdb || !args.staging) {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotEnv(path.join(repoRoot, ".env"));
 
-for (const key of ["XIAOMI_MIMO_API_KEY", "PAN115_COOKIE", "TMDB_READ_TOKEN", "MEDIA_TRACK_115_TEST_ROOT_CID"]) {
+for (const key of ["AGENT_MODEL_API_KEY", "PAN115_COOKIE", "TMDB_READ_TOKEN", "MEDIA_TRACK_115_TEST_ROOT_CID"]) {
   if (!process.env[key]) {
     console.error(`${key} is not set. Aborting.`);
     process.exit(1);
@@ -55,7 +55,7 @@ for (const key of ["XIAOMI_MIMO_API_KEY", "PAN115_COOKIE", "TMDB_READ_TOKEN", "M
 const {
   createProtectedPan115CookieStorageExecutorFromEnv,
   createTmdbMetadataProviderFromEnv,
-  createXiaomiMimoAgentNodesFromEnv,
+  createAgentNodesFromEnv,
   prepareTrackingTarget,
   runSeriesPackageInitializationAndPersist,
   SQLiteWorkflowRepository,
@@ -100,7 +100,7 @@ const result = await runSeriesPackageInitializationAndPersist({
   stagingDirectoryId: args.staging,
   storageParentDirectoryId: process.env.MEDIA_TRACK_115_TEST_ROOT_CID,
   storage,
-  agents: createXiaomiMimoAgentNodesFromEnv(process.env),
+  agents: createAgentNodesFromEnv(process.env),
   repository,
   workflowRun: { id: `live_pack_${Date.now()}`, startedAt, finishedAt: new Date().toISOString() },
 });

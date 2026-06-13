@@ -67,7 +67,7 @@ if (args.help || !args.dir) {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotEnv(path.join(repoRoot, ".env"));
 
-for (const key of ["XIAOMI_MIMO_API_KEY", "PANSOU_BASE_URL", "PAN115_COOKIE", "TMDB_READ_TOKEN", "MEDIA_TRACK_115_TEST_ROOT_CID"]) {
+for (const key of ["AGENT_MODEL_API_KEY", "PANSOU_BASE_URL", "PAN115_COOKIE", "TMDB_READ_TOKEN", "MEDIA_TRACK_115_TEST_ROOT_CID"]) {
   if (!process.env[key]) {
     console.error(`${key} is not set. Aborting.`);
     process.exit(1);
@@ -79,7 +79,7 @@ const {
   createPanSouResourceProviderFromEnv,
   createProtectedPan115CookieStorageExecutorFromEnv,
   createTmdbMetadataProviderFromEnv,
-  createXiaomiMimoAgentNodesFromEnv,
+  createAgentNodesFromEnv,
   prepareTrackingTarget,
   runType3MonitoringAndPersist,
   SQLiteWorkflowRepository,
@@ -130,7 +130,7 @@ const result = await runType3MonitoringAndPersist({
   keyword: target.keyword,
   resourceProvider: createPanSouResourceProviderFromEnv(),
   storage,
-  agents: createXiaomiMimoAgentNodesFromEnv(process.env),
+  agents: createAgentNodesFromEnv(process.env),
   repository,
   workflowRun: { id: runId, startedAt, finishedAt: new Date().toISOString() },
 });

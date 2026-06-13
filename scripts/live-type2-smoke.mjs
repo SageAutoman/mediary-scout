@@ -67,7 +67,7 @@ if (args.help) {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotEnv(path.join(repoRoot, ".env"));
 
-for (const key of ["XIAOMI_MIMO_API_KEY", "PANSOU_BASE_URL", "PAN115_COOKIE", "TMDB_READ_TOKEN", "MEDIA_TRACK_115_TEST_ROOT_CID"]) {
+for (const key of ["AGENT_MODEL_API_KEY", "PANSOU_BASE_URL", "PAN115_COOKIE", "TMDB_READ_TOKEN", "MEDIA_TRACK_115_TEST_ROOT_CID"]) {
   if (!process.env[key]) {
     console.error(`${key} is not set. Aborting.`);
     process.exit(1);
@@ -78,7 +78,7 @@ const {
   createPanSouResourceProviderFromEnv,
   createProtectedPan115CookieStorageExecutorFromEnv,
   createTmdbMetadataProviderFromEnv,
-  createXiaomiMimoAgentNodesFromEnv,
+  createAgentNodesFromEnv,
   prepareTrackingTarget,
   queueTrackingInitialization,
   runQueuedType2Workflow,
@@ -134,7 +134,7 @@ const result = await runQueuedType2Workflow({
   repository,
   resourceProvider: createPanSouResourceProviderFromEnv(),
   storage,
-  agents: createXiaomiMimoAgentNodesFromEnv(process.env),
+  agents: createAgentNodesFromEnv(process.env),
 });
 const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
 console.log(`      worker result (${elapsed}s):`, JSON.stringify(result));

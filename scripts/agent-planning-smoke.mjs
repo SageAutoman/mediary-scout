@@ -24,7 +24,7 @@ Options:
   --quality  <string>   Quality preference (default: 4K)
   --help                Show this help
 
-Reads XIAOMI_MIMO_* and PANSOU_BASE_URL from .env / environment.
+Reads AGENT_MODEL_* and PANSOU_BASE_URL from .env / environment.
 This run is read-only: it searches PanSou and asks the model to plan;
 it never touches 115 storage.`;
 
@@ -84,8 +84,8 @@ if (args.help || !args.title) {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 loadDotEnv(path.join(repoRoot, ".env"));
 
-if (!process.env.XIAOMI_MIMO_API_KEY) {
-  console.error("XIAOMI_MIMO_API_KEY is not set (in .env or the environment). Aborting.");
+if (!process.env.AGENT_MODEL_API_KEY) {
+  console.error("AGENT_MODEL_API_KEY is not set (in .env or the environment). Aborting.");
   process.exit(1);
 }
 if (!process.env.PANSOU_BASE_URL) {
@@ -95,7 +95,7 @@ if (!process.env.PANSOU_BASE_URL) {
 
 const {
   createPanSouResourceProviderFromEnv,
-  createXiaomiMimoAgentNodesFromEnv,
+  createAgentNodesFromEnv,
   runAcquisitionPlanningSmoke,
 } = await import(path.join(repoRoot, "packages/workflow/dist/index.js"));
 
@@ -118,12 +118,12 @@ const input = {
 
 console.log("=== acquisition planning live smoke (read-only) ===");
 console.log(JSON.stringify(input, null, 2));
-console.log("model:", process.env.XIAOMI_MIMO_MODEL_ID ?? "mimo-v2.5-pro (default)");
+console.log("model:", process.env.AGENT_MODEL_ID ?? "mimo-v2.5-pro (default)");
 
 const startedAt = Date.now();
 const result = await runAcquisitionPlanningSmoke({
   ...input,
-  agents: createXiaomiMimoAgentNodesFromEnv(process.env),
+  agents: createAgentNodesFromEnv(process.env),
   resourceProvider: createPanSouResourceProviderFromEnv(),
 });
 const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
