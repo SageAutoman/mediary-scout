@@ -3,11 +3,11 @@ import {
   createProtectedPan115CookieStorageExecutorFromEnv,
   createTmdbMetadataProviderFromEnv,
   episodeCode,
-  FakeAgentNodes,
   FakeResourceProvider,
   FakeStorageExecutor,
   createNotifyChannelsFromEnv,
-  createAgentNodesFromEnv,
+  createAgentModelFromEnv,
+  createStubAcquisitionModel,
   dispatchNotifications,
   formatDailyDigestPushText,
   getTrackedSeasonStatusView,
@@ -25,7 +25,6 @@ import {
   runScheduledType3Monitoring,
   sendPushNotifications,
   createPostgresWorkflowRepositorySync,
-  type AgentNodes,
   type MediaSearchCandidate,
   type MediaTitle,
   type NotificationEvent,
@@ -55,8 +54,8 @@ let repository: WorkflowRepository | null = null;
 let demoSeedPromise: Promise<void> | null = null;
 let fakeResourceProvider: ResourceProvider | null = null;
 let fakeStorageExecutor: StorageExecutor | null = null;
-let agentNodes:
-  | { adapter: "fake" | "vercel-ai"; preferredLanguage: string | undefined; nodes: AgentNodes }
+let agentModel:
+  | { adapter: "fake" | "vercel-ai"; model: ReturnType<typeof createAgentModelFromEnv> }
   | null = null;
 
 /** The Postgres connection string for durable dev/prod state. SQLite has been
@@ -149,13 +148,15 @@ export async function runNextQueuedWorkflow() {
   // The user's language preference is standing context baked into the agent
   // instance (one global preference), so every workflow — movie, series, type2,
   // anime — searches with it. No per-workflow plumbing.
-  const agents = await getAgentNodes(repository);
+  const { model, preferredLanguage } = await getAgentModel(repository);
+  const language = preferredLanguage === undefined ? {} : { preferredLanguage };
   const startedAt = new Date().toISOString();
   const type2 = await runQueuedType2Workflow({
     repository,
     resourceProvider: getWorkerResourceProvider(),
     storage: getWorkerStorageExecutor(),
-    agents,
+    model,
+    ...language,
     storageParentDirectoryId: storageParentDirectoryId(),
     animeStorageParentDirectoryId: animeParentDirectoryId(),
   });
@@ -167,7 +168,8 @@ export async function runNextQueuedWorkflow() {
     repository,
     resourceProvider: getWorkerResourceProvider(),
     storage: getWorkerStorageExecutor(),
-    agents,
+    model,
+    ...language,
     storageParentDirectoryId: storageParentDirectoryId(),
     animeStorageParentDirectoryId: animeParentDirectoryId(),
   });
@@ -179,7 +181,8 @@ export async function runNextQueuedWorkflow() {
     repository,
     resourceProvider: getWorkerResourceProvider(),
     storage: getWorkerStorageExecutor(),
-    agents,
+    model,
+    ...language,
     stagingParentDirectoryId: moviesParentDirectoryId(),
     moviesParentDirectoryId: moviesParentDirectoryId(),
   });
@@ -418,12 +421,15 @@ export async function runScheduledType3(options?: { force?: boolean }): Promise<
   try {
     await hydratePan115CookieFromDb();
     const sync = tmdbSeasonMetadataSync();
+    const { model, preferredLanguage } = await getAgentModel(repository);
     result = await runScheduledType3Monitoring({
       repository,
       resourceProvider: getWorkerResourceProvider(),
       storage: getWorkerStorageExecutor(),
-      agents: await getAgentNodes(repository),
+      model,
+      ...(preferredLanguage === undefined ? {} : { preferredLanguage }),
       storageParentDirectoryId: storageParentDirectoryId(),
+      animeStorageParentDirectoryId: animeParentDirectoryId(),
       staleActiveRunTimeoutMs: 30 * 60 * 1000,
       ...(sync ? { syncSeasonMetadata: sync } : {}),
     });
@@ -596,26 +602,26 @@ function getWorkerStorageExecutor(): StorageExecutor {
   return fakeStorageExecutor;
 }
 
-async function getAgentNodes(repository: {
+/**
+ * The V2 acquisition agent is a bare LanguageModel driving the sandbox tool-loop
+ * (not the old AgentNodes). The adapter policy forces vercel-ai whenever the live
+ * PanSou provider or 115 storage is in use; the fake adapter gets a no-op stub so
+ * dev/demo runs complete without a real model. The preferred subtitle language is
+ * passed to each workflow as standing context, not baked into the model instance.
+ */
+async function getAgentModel(repository: {
   getSetting(key: string): Promise<string | null>;
-}): Promise<AgentNodes> {
+}): Promise<{ model: ReturnType<typeof createAgentModelFromEnv>; preferredLanguage: string | undefined }> {
   assertWorkflowAgentAdapterPolicy(process.env);
   const adapter = process.env.MEDIA_TRACK_AGENT_ADAPTER === "vercel-ai" ? "vercel-ai" : "fake";
   const preferredLanguage = await getPreferredLanguage(repository);
-  // The preferred language is baked into the agent instance, so the cache is
-  // keyed by it — change the setting and the next run rebuilds with the new one.
-  if (agentNodes?.adapter === adapter && agentNodes.preferredLanguage === preferredLanguage) {
-    return agentNodes.nodes;
+  if (agentModel?.adapter !== adapter) {
+    agentModel = {
+      adapter,
+      model: adapter === "vercel-ai" ? createAgentModelFromEnv(process.env) : createStubAcquisitionModel(),
+    };
   }
-  agentNodes = {
-    adapter,
-    preferredLanguage,
-    nodes:
-      adapter === "vercel-ai"
-        ? createAgentNodesFromEnv(process.env, preferredLanguage)
-        : new FakeAgentNodes(),
-  };
-  return agentNodes.nodes;
+  return { model: agentModel.model, preferredLanguage };
 }
 
 function fakeTransferOutcomes() {
