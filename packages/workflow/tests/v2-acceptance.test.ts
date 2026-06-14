@@ -30,7 +30,7 @@ async function makeSandbox(opts: {
     storage["packs"].set("__seed__", opts.seedSeason);
     await storage.transferCandidate({ candidateId: "__seed__", intoDirectoryId: targetSeasonDirectoryId });
   }
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId, need: opts.need });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId }, need: opts.need });
   return { sandbox, storage, stagingDirectoryId, targetSeasonDirectoryId };
 }
 
@@ -57,7 +57,7 @@ describe("§6b acceptance — the 12 invariants", () => {
     });
     const search = await sandbox.searchResources("show");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "pack0" });
-    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.filter((f) => f.isVideo).map((f) => f.id) });
+    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.filter((f) => f.isVideo).map((f) => f.id), season: 1 });
     await sandbox.markObtained({
       episodes: moved.season.filter((f) => f.isVideo).map((f, i) => ({ code: need[i]!, fileId: f.id })),
     });
@@ -79,7 +79,7 @@ describe("§6b acceptance — the 12 invariants", () => {
     // Agent predicted "only E01" but the forced reread returns all 13 — the truth.
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand_full" });
     expect(transfer.staging.filter((f) => f.isVideo)).toHaveLength(13);
-    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.filter((f) => f.isVideo).map((f) => f.id) });
+    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.filter((f) => f.isVideo).map((f) => f.id), season: 1 });
     await sandbox.markObtained({
       episodes: moved.season.filter((f) => f.isVideo).map((f, i) => ({ code: need[i]!, fileId: f.id })),
     });
@@ -140,7 +140,7 @@ describe("§6b acceptance — the 12 invariants", () => {
     const search = await sandbox.searchResources("show");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand" });
     const target = transfer.staging.find((f) => f.path === "Show - 01.mkv")!;
-    await sandbox.moveToSeason({ fileIds: [target.id] });
+    await sandbox.moveToSeason({ fileIds: [target.id], season: 1 });
 
     // Extras were NOT moved and NOT silently deleted — still visible for classification.
     const residue = await sandbox.inspectStaging();
@@ -161,7 +161,7 @@ describe("§6b acceptance — the 12 invariants", () => {
     const search = await sandbox.searchResources("show");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "bb_pack" });
     const ep = transfer.staging.find((f) => f.path.startsWith("Breaking Bad"))!;
-    await sandbox.moveToSeason({ fileIds: [ep.id] });
+    await sandbox.moveToSeason({ fileIds: [ep.id], season: 1 });
 
     // El Camino was never auto-moved or auto-marked — it remains in staging for review.
     const residue = await sandbox.inspectStaging();
@@ -200,7 +200,7 @@ describe("§6b acceptance — the 12 invariants", () => {
       provider,
       storage,
       stagingDirectoryId: "ghost_staging", // never created
-      targetSeasonDirectoryId: "ghost_season",
+      targetSeasonDirectoryIds: { 1: "ghost_season" },
       need: episodes(1),
     });
     const search = await sandbox.searchResources("show");
@@ -229,13 +229,13 @@ describe("§6b acceptance — the 12 invariants", () => {
     const search = await sandbox.searchResources("show");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "new_small" });
     // Move the new pack in: E01-12 collide -> "(1)" duplicates; E13-14 are new.
-    await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id) });
+    await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id), season: 1 });
     const season = await sandbox.inspectTargetDir();
     // Agent groups by episode and keeps the LARGER of each colliding pair (keep-big).
     const collisions = season.filter((f) => /\(1\)/.test(f.path));
     expect(collisions).toHaveLength(12); // the small new copies of E01-12 landed as "(1)"
     const smallDupIds = collisions.map((f) => f.id);
-    await sandbox.deleteFiles({ directory: "season", fileIds: smallDupIds });
+    await sandbox.deleteFiles({ directory: "season", fileIds: smallDupIds, season: 1 });
 
     const after = await sandbox.inspectTargetDir();
     expect(after.filter((f) => /\(1\)/.test(f.path))).toHaveLength(0); // no dup pollution
@@ -253,7 +253,7 @@ describe("§6b acceptance — the 12 invariants", () => {
     });
     const search = await sandbox.searchResources("show");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "pack" });
-    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.filter((f) => f.isVideo).map((f) => f.id) });
+    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.filter((f) => f.isVideo).map((f) => f.id), season: 1 });
     // Files are now flat in Season 1 (extracted out of the wrapper).
     expect(moved.season.every((f) => !f.path.includes("/"))).toBe(true);
     expect(moved.season.some((f) => /\(1\)/.test(f.path))).toBe(false);

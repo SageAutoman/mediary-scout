@@ -39,7 +39,7 @@ async function sandboxFor(need: string[]) {
   const storage = new Storage115Simulator({ packs: {} });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  return new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId, need });
+  return new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId }, need });
 }
 
 describe("need derivation", () => {

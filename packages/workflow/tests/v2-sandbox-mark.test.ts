@@ -10,10 +10,10 @@ async function setupWithSeasonFile() {
   const storage = new Storage115Simulator({ packs: { cand: { files: [{ path: "Show - 01.mkv", sizeBytes: 1 }] } } });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId } });
   const search = await sandbox.searchResources("show");
   const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand" });
-  const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id) });
+  const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id), season: 1 });
   return { sandbox, seasonFileId: moved.season[0]!.id };
 }
 

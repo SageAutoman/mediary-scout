@@ -12,7 +12,7 @@ async function setup() {
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId } });
   return { sandbox };
 }
 
@@ -33,7 +33,7 @@ describe("TaskSandbox — inspect tools (read-only, full raw tree, scoped)", () 
     const search = await sandbox.searchResources("show");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand" });
     const videoIds = transfer.staging.filter((f) => f.isVideo).map((f) => f.id);
-    await sandbox.moveToSeason({ fileIds: videoIds });
+    await sandbox.moveToSeason({ fileIds: videoIds, season: 1 });
 
     const tree = await sandbox.inspectTargetDir();
 

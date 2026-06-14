@@ -23,14 +23,14 @@ async function setupNeedingOneEpisode(need: string[]) {
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider: provider(), storage, stagingDirectoryId, targetSeasonDirectoryId, need });
+  const sandbox = new TaskSandbox({ provider: provider(), storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId }, need });
   return { sandbox };
 }
 
 async function coverOneEpisode(sandbox: TaskSandbox) {
   const search = await sandbox.searchResources("show");
   const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand1" });
-  const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id) });
+  const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id), season: 1 });
   await sandbox.markObtained({ episodes: [{ code: "S01E01", fileId: moved.season[0]!.id }] });
   return search;
 }

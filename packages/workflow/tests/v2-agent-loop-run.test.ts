@@ -39,7 +39,7 @@ async function setup(need: string[]) {
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId, need });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId }, need });
   return { sandbox, storage, targetSeasonDirectoryId };
 }
 
@@ -54,14 +54,14 @@ describe("runAcquisitionAgent — the real AI SDK tool-loop over the sandbox", (
     const search = await sandbox.searchResources("lycoris recoil");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "full_pack" });
     const stagingFileId = transfer.staging[0]!.id;
-    const moved = await sandbox.moveToSeason({ fileIds: [stagingFileId] });
+    const moved = await sandbox.moveToSeason({ fileIds: [stagingFileId], season: 1 });
     const seasonFileId = moved.season[0]!.id;
     // Now a fresh sandbox over the SAME storage state, driven purely by the model.
     const liveSandbox = new TaskSandbox({
       provider: new FakeResourceProviderV2({ results: {} }),
       storage,
       stagingDirectoryId: (await storage.listSubdirectories({ directoryId: "root" })).find((d) => d.path === "staging")!.id,
-      targetSeasonDirectoryId,
+      targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId },
       need: ["S01E01"],
     });
 

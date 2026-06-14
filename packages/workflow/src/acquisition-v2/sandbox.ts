@@ -26,11 +26,10 @@ export interface TaskSandboxOptions {
    *  series pack's files are distributed across these per season (§2 targetSeasons +
    *  moveToSeason(fileIds, season); architecture §Multi-season; permission-audit 105/209). */
   targetSeasonDirectoryIds?: Record<number, string>;
-  /** Movie: the single scoped movie directory (§2 targetMovieDir). */
+  /** Movie: the single scoped movie directory (§2 targetMovieDir). A movie has no
+   *  seasons, so its moveToSeason omits `season`. TV tasks NEVER use this — even a
+   *  single-season TV task uses targetSeasonDirectoryIds so the season stays known. */
   targetMovieDirectoryId?: string;
-  /** Back-compat single-season handle: a task whose need is one season may pass
-   *  this instead of the map; moveToSeason then defaults to it. */
-  targetSeasonDirectoryId?: string;
   /** Coverage need: the missing episode codes — which MAY span multiple seasons,
    *  e.g. ["S01E13","S04E07"] — or ["MOVIE"]. Coverage is met when every token
    *  has a markObtained-confirmed entry. Drives the §3 "no more side effects once
@@ -61,8 +60,8 @@ export class TaskSandbox {
   private readonly stagingDirectoryId: string | undefined;
   /** TV: season number -> scoped Season directory (multi-season distribution). */
   private readonly seasonDirs: Map<number, string>;
-  /** A single-season or movie task's one target directory (back-compat / movie). */
-  private readonly defaultTargetDir: string | undefined;
+  /** A movie task's one target directory (movies have no seasons). */
+  private readonly movieDir: string | undefined;
   private readonly need: readonly string[];
   private readonly seenKeywords = new Set<string>();
   private readonly snapshotByKeyword = new Map<string, ResourceSnapshotV2>();
@@ -77,25 +76,25 @@ export class TaskSandbox {
     this.seasonDirs = new Map(
       Object.entries(options.targetSeasonDirectoryIds ?? {}).map(([season, id]) => [Number(season), id]),
     );
-    this.defaultTargetDir = options.targetSeasonDirectoryId ?? options.targetMovieDirectoryId;
+    this.movieDir = options.targetMovieDirectoryId;
     this.need = options.need ?? [];
   }
 
-  /** Every scoped target directory (all seasons + the movie/default) — the union
-   *  used for presence checks and full-target inspection. */
+  /** Every scoped target directory (all seasons + the movie) — the union used for
+   *  presence checks and full-target inspection. */
   private allTargetDirIds(): string[] {
     const ids = [...this.seasonDirs.values()];
-    if (this.defaultTargetDir !== undefined) ids.push(this.defaultTargetDir);
+    if (this.movieDir !== undefined) ids.push(this.movieDir);
     return ids;
   }
 
-  /** Resolve which scoped target directory a move/inspect/delete addresses. With an
-   *  explicit season it must be a configured season handle; without one it falls
-   *  back to the single-season/movie default (or the sole season if there is one). */
+  /** Resolve which scoped target directory a move/inspect/delete addresses. A TV
+   *  task ALWAYS names the season explicitly — single-season included, so the
+   *  season number stays known and a file can never land in an unknown season.
+   *  Only a movie task (no seasons) resolves without a season. */
   private resolveTargetDir(season?: number): string | undefined {
     if (season !== undefined) return this.seasonDirs.get(season);
-    if (this.defaultTargetDir !== undefined) return this.defaultTargetDir;
-    return this.seasonDirs.size === 1 ? [...this.seasonDirs.values()][0] : undefined;
+    return this.seasonDirs.size === 0 ? this.movieDir : undefined;
   }
 
   /** Whether every needed token has been confirmed obtained — the gate that
@@ -226,8 +225,8 @@ export class TaskSandbox {
     if (!targetDir) {
       throw new Error(
         input.season === undefined
-          ? "SANDBOX_SEASON_REQUIRED: this task spans multiple seasons; pass the season for each move"
-          : `SANDBOX_NO_SEASON_DIR: no scoped directory for season ${input.season}`,
+          ? "SANDBOX_SEASON_REQUIRED: every TV move must name its season (single-season included — the season number must stay known)"
+          : `SANDBOX_NO_SEASON_DIR: no scoped directory for season ${input.season} (out of this task's season scope)`,
       );
     }
     const stagingIds = new Set(

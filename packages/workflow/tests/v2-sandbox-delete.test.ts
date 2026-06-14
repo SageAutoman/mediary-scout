@@ -12,7 +12,7 @@ async function setup() {
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId } });
   return { sandbox };
 }
 
@@ -21,17 +21,17 @@ describe("TaskSandbox — deleteFiles (agent-decided dedup/residue, scoped, rere
     const { sandbox } = await setup();
     const search = await sandbox.searchResources("show");
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand" });
-    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id) });
+    const moved = await sandbox.moveToSeason({ fileIds: transfer.staging.map((f) => f.id), season: 1 });
     const toDelete = moved.season.find((f) => f.path === "a.mkv")!.id;
 
-    const result = await sandbox.deleteFiles({ directory: "season", fileIds: [toDelete] });
+    const result = await sandbox.deleteFiles({ directory: "season", fileIds: [toDelete], season: 1 });
 
     expect(result.directory.map((f) => f.path)).toEqual(["b.mkv"]);
   });
 
   it("refuses deleting a file that is not in the named scoped directory", async () => {
     const { sandbox } = await setup();
-    await expect(sandbox.deleteFiles({ directory: "season", fileIds: ["ghost"] })).rejects.toThrow(
+    await expect(sandbox.deleteFiles({ directory: "season", fileIds: ["ghost"], season: 1 })).rejects.toThrow(
       /FILES_NOT_IN/,
     );
   });

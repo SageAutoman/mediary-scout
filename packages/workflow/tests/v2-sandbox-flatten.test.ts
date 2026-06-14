@@ -13,12 +13,12 @@ async function setupExtracted() {
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId } });
   const search = await sandbox.searchResources("show");
   const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand" });
   // Extract the episode out of the wrapper into Season 1; the empty wrapper + junk remain in staging.
   const videoIds = transfer.staging.filter((f) => f.isVideo).map((f) => f.id);
-  await sandbox.moveToSeason({ fileIds: videoIds });
+  await sandbox.moveToSeason({ fileIds: videoIds, season: 1 });
   return { sandbox, storage, stagingDirectoryId };
 }
 

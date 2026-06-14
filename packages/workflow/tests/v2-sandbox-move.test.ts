@@ -12,7 +12,7 @@ async function setup() {
   });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId } });
   return { sandbox };
 }
 
@@ -23,7 +23,7 @@ describe("TaskSandbox — moveToSeason (agent-driven extract, scoped, reread)", 
     const transfer = await sandbox.transferCandidate({ snapshotId: search.snapshot!.id, candidateId: "cand_full" });
     const videoIds = transfer.staging.filter((file) => file.isVideo).map((file) => file.id);
 
-    const result = await sandbox.moveToSeason({ fileIds: videoIds });
+    const result = await sandbox.moveToSeason({ fileIds: videoIds, season: 1 });
 
     // The episodes are now directly in Season 1 (extracted out of the pack dir);
     // staging no longer holds them.
@@ -33,6 +33,6 @@ describe("TaskSandbox — moveToSeason (agent-driven extract, scoped, reread)", 
 
   it("refuses moving a file that is not in this task's staging (scope guard)", async () => {
     const { sandbox } = await setup();
-    await expect(sandbox.moveToSeason({ fileIds: ["not_in_staging"] })).rejects.toThrow(/staging/i);
+    await expect(sandbox.moveToSeason({ fileIds: ["not_in_staging"], season: 1 })).rejects.toThrow(/staging/i);
   });
 });

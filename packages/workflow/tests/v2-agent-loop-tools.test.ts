@@ -11,7 +11,7 @@ async function setup(need: string[] = ["S01E01"]) {
   const storage = new Storage115Simulator({ packs: { cand: { files: [{ path: "Show - 01.mkv", sizeBytes: 9 }] } } });
   const stagingDirectoryId = await storage.createDirectory({ name: "staging", parentId: "root" });
   const targetSeasonDirectoryId = await storage.createDirectory({ name: "Season 1", parentId: "root" });
-  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryId, need });
+  const sandbox = new TaskSandbox({ provider, storage, stagingDirectoryId, targetSeasonDirectoryIds: { 1: targetSeasonDirectoryId }, need });
   return { sandbox };
 }
 
@@ -70,7 +70,7 @@ describe("buildSandboxToolSet — the agent's tool surface over the cage", () =>
     const snapshotId = (search.snapshot as { id: string }).id;
     const transfer = await call(tools.transferCandidate, { snapshotId, candidateId: "cand" });
     const staging = transfer.staging as Array<{ id: string }>;
-    const moved = await call(tools.moveToSeason, { fileIds: staging.map((f) => f.id) });
+    const moved = await call(tools.moveToSeason, { fileIds: staging.map((f) => f.id), season: 1 });
     const season = moved.season as Array<{ id: string }>;
     await call(tools.markObtained, { episodes: [{ code: "S01E01", fileId: season[0]!.id }] });
 
