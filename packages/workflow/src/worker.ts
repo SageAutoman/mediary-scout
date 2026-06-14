@@ -1,12 +1,13 @@
+import type { LanguageModel } from "ai";
 import type { MediaType, WorkflowStatus } from "./domain.js";
-import type { AgentNodes, ResourceProvider, StorageExecutor } from "./ports.js";
-import type { PersistedWorkflowRunSnapshot, WorkflowRepository } from "./repository.js";
+import type { ResourceProvider, StorageExecutor } from "./ports.js";
+import type { WorkflowRepository } from "./repository.js";
 import {
-  runMovieAcquisitionAndPersist,
-  runSeriesInitializationAndPersist,
-  runType2InitializationAndPersist,
-  runType3MonitoringAndPersist,
-} from "./runner.js";
+  runMovieAcquisitionV2AndPersist,
+  runSeriesInitializationV2AndPersist,
+  runType2InitializationV2AndPersist,
+  runType3MonitoringV2AndPersist,
+} from "./runner-v2.js";
 import { syncSeasonAgainstMetadata } from "./season-sync.js";
 import type { AcquisitionSeasonScope } from "./workflow.js";
 
@@ -55,7 +56,8 @@ export async function runQueuedType2Workflow(input: {
   repository: WorkflowRepository;
   resourceProvider: ResourceProvider;
   storage: StorageExecutor;
-  agents: AgentNodes;
+  model: LanguageModel;
+  preferredLanguage?: string;
   now?: () => string;
   storageParentDirectoryId?: string;
   /** Separate landing parent for anime (see runQueuedSeriesInitialization). */
@@ -70,24 +72,18 @@ export async function runQueuedType2Workflow(input: {
     return { status: "idle" };
   }
 
-  const keyword = keywordFromQueuedRun(claimed);
   try {
-    const result = await runType2InitializationAndPersist({
+    const result = await runType2InitializationV2AndPersist({
       title: claimed.title,
       season: claimed.season,
-      keyword,
+      categoryParentId: requireCategoryParent(
+        storageParentForTitle(claimed.title, input.storageParentDirectoryId, input.animeStorageParentDirectoryId),
+      ),
       resourceProvider: input.resourceProvider,
       storage: input.storage,
-      agents: input.agents,
+      model: input.model,
       repository: input.repository,
-      ...((): { storageParentDirectoryId: string } | Record<string, never> => {
-        const parent = storageParentForTitle(
-          claimed.title,
-          input.storageParentDirectoryId,
-          input.animeStorageParentDirectoryId,
-        );
-        return parent === undefined ? {} : { storageParentDirectoryId: parent };
-      })(),
+      ...(input.preferredLanguage === undefined ? {} : { preferredLanguage: input.preferredLanguage }),
       workflowRun: {
         id: claimed.workflowRun.id,
         startedAt: claimed.workflowRun.startedAt,
@@ -160,8 +156,12 @@ export async function runScheduledType3Monitoring(input: {
   repository: WorkflowRepository;
   resourceProvider: ResourceProvider;
   storage: StorageExecutor;
-  agents: AgentNodes;
+  model: LanguageModel;
+  preferredLanguage?: string;
   storageParentDirectoryId: string;
+  /** Separate landing parent for anime, so anime patrol verify-or-creates under
+   *  its own tree (see runQueuedSeriesInitialization). */
+  animeStorageParentDirectoryId?: string;
   now?: () => string;
   createWorkflowRunId?: () => string;
   staleActiveRunTimeoutMs?: number;
@@ -237,17 +237,19 @@ export async function runScheduledType3Monitoring(input: {
     }
 
     try {
-      const result = await runType3MonitoringAndPersist({
+      const result = await runType3MonitoringV2AndPersist({
         title: state.title,
         season,
         episodes,
-        keyword: `${state.title.title} ${season.qualityPreference}`.trim(),
+        categoryParentId: requireCategoryParent(
+          storageParentForTitle(state.title, input.storageParentDirectoryId, input.animeStorageParentDirectoryId),
+        ),
         resourceProvider: input.resourceProvider,
         storage: input.storage,
-        agents: input.agents,
+        model: input.model,
         repository: input.repository,
+        ...(input.preferredLanguage === undefined ? {} : { preferredLanguage: input.preferredLanguage }),
         workflowRun: { id: workflowRunId, startedAt, finishedAt: now() },
-        storageParentDirectoryId: input.storageParentDirectoryId,
       });
       outcomes.push({
         trackedSeasonId: state.season.id,
@@ -304,21 +306,26 @@ function staleStartedBefore(nowIso: string, timeoutMs: number | undefined): stri
   return new Date(nowMs - timeoutMs).toISOString();
 }
 
-function keywordFromQueuedRun(snapshot: PersistedWorkflowRunSnapshot): string {
-  const queuedEvent = snapshot.workflowRun.auditEvents.find(
-    (event) => event.type === "tracking_request_queued" && typeof event.data?.["keyword"] === "string",
-  );
-  if (typeof queuedEvent?.data?.["keyword"] === "string") {
-    return queuedEvent.data["keyword"];
+/**
+ * The V2 directory lifecycle must verify-or-create the library category parent
+ * (Movies/TV/Anime); a missing parent is a misconfiguration, not a silent
+ * account-root fallback (fail loud — see acquisition-hard-details).
+ */
+function requireCategoryParent(parent: string | undefined): string {
+  if (parent === undefined || parent === "") {
+    throw new Error(
+      "MEDIA_TRACK_CATEGORY_PARENT_REQUIRED: a library category parent (Movies/TV/Anime) is required for directory verify-or-create",
+    );
   }
-  return `${snapshot.title.title} ${snapshot.season.qualityPreference}`.trim();
+  return parent;
 }
 
 export async function runQueuedMovieAcquisition(input: {
   repository: WorkflowRepository;
   resourceProvider: ResourceProvider;
   storage: StorageExecutor;
-  agents: AgentNodes;
+  model: LanguageModel;
+  preferredLanguage?: string;
   stagingParentDirectoryId: string;
   moviesParentDirectoryId: string;
   now?: () => string;
@@ -329,25 +336,17 @@ export async function runQueuedMovieAcquisition(input: {
     return { status: "idle" };
   }
 
-  const queuedEvent = claimed.workflowRun.auditEvents.find(
-    (event) => event.type === "movie_init_queued" && typeof event.data?.["keyword"] === "string",
-  );
-  const keyword =
-    typeof queuedEvent?.data?.["keyword"] === "string"
-      ? queuedEvent.data["keyword"]
-      : `${claimed.title.title} 4K`.trim();
-
   try {
-    const result = await runMovieAcquisitionAndPersist({
+    const result = await runMovieAcquisitionV2AndPersist({
       title: claimed.title,
-      keyword,
+      categoryParentId: input.moviesParentDirectoryId,
+      stagingParentDirectoryId: input.stagingParentDirectoryId,
       resourceProvider: input.resourceProvider,
       storage: input.storage,
-      agents: input.agents,
+      model: input.model,
       repository: input.repository,
+      ...(input.preferredLanguage === undefined ? {} : { preferredLanguage: input.preferredLanguage }),
       workflowRun: { id: claimed.workflowRun.id, startedAt: claimed.workflowRun.startedAt, finishedAt: now() },
-      stagingParentDirectoryId: input.stagingParentDirectoryId,
-      moviesParentDirectoryId: input.moviesParentDirectoryId,
     });
     return { status: "ran", workflowRunId: claimed.workflowRun.id, workflowStatus: result.status };
   } catch (error) {
@@ -375,7 +374,8 @@ export async function runQueuedSeriesInitialization(input: {
   repository: WorkflowRepository;
   resourceProvider: ResourceProvider;
   storage: StorageExecutor;
-  agents: AgentNodes;
+  model: LanguageModel;
+  preferredLanguage?: string;
   storageParentDirectoryId: string;
   /** Separate landing parent for anime, so the 动漫 shelf is physically its own
    *  tree on 115 and never mixed into the TV shows directory. */
@@ -393,28 +393,23 @@ export async function runQueuedSeriesInitialization(input: {
 
   const queuedEvent = claimed.workflowRun.auditEvents.find((event) => event.type === "series_init_queued");
   const seasons = (queuedEvent?.data?.["seasons"] ?? []) as AcquisitionSeasonScope[];
-  const keyword =
-    typeof queuedEvent?.data?.["keyword"] === "string"
-      ? queuedEvent.data["keyword"]
-      : `${claimed.title.title} ${claimed.season.qualityPreference}`.trim();
 
   try {
     if (seasons.length === 0) {
       throw new Error("Queued series initialization run is missing its season metadata");
     }
-    const result = await runSeriesInitializationAndPersist({
+    const result = await runSeriesInitializationV2AndPersist({
       title: claimed.title,
       seasons,
-      keyword,
-      storageParentDirectoryId: storageParentForTitle(
-        claimed.title,
-        input.storageParentDirectoryId,
-        input.animeStorageParentDirectoryId,
-      )!,
+      categoryParentId: requireCategoryParent(
+        storageParentForTitle(claimed.title, input.storageParentDirectoryId, input.animeStorageParentDirectoryId),
+      ),
+      qualityPreference: claimed.season.qualityPreference,
       resourceProvider: input.resourceProvider,
       storage: input.storage,
-      agents: input.agents,
+      model: input.model,
       repository: input.repository,
+      ...(input.preferredLanguage === undefined ? {} : { preferredLanguage: input.preferredLanguage }),
       workflowRun: {
         id: claimed.workflowRun.id,
         startedAt: claimed.workflowRun.startedAt,

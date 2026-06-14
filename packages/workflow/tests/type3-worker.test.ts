@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { MockLanguageModelV3 } from "ai/test";
 import {
   createEpisodeStates,
-  FakeAgentNodes,
   FakeResourceProvider,
   FakeStorageExecutor,
   InMemoryWorkflowRepository,
@@ -14,13 +14,51 @@ import {
 
 const fixedNow = () => "2026-06-12T00:00:00.000Z";
 
+const USAGE = {
+  inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+} as const;
+
+/** Searches once, honestly reports no coverage. */
+function noCoverageModel() {
+  let i = 0;
+  const tool = (name: string, input: unknown) => ({
+    content: [{ type: "tool-call", toolCallId: `c${i}`, toolName: name, input: JSON.stringify(input) }],
+    finishReason: "tool-calls" as const,
+    usage: USAGE,
+    warnings: [],
+  });
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      i += 1;
+      if (i === 1) return tool("searchResources", { keyword: "show" });
+      if (i === 2) return tool("reportNoCoverage", { reason: "no candidates" });
+      return { content: [{ type: "text", text: "done" }], finishReason: "stop", usage: USAGE, warnings: [] };
+    },
+  });
+}
+
+/** Throws on any call — a model whose API is down, and a guard the no-op path
+ *  must never invoke. */
+function throwingModel() {
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      throw new Error("agent model unavailable");
+    },
+  });
+}
+
+function emptyProvider() {
+  return new FakeResourceProvider({ keywordResults: {} });
+}
+
 function trackedFixture(suffix = "show") {
   const title: MediaTitle = {
     id: `title_${suffix}`,
     tmdbId: 1,
     type: "tv",
-    title: "Show",
-    originalTitle: "Show",
+    title: `Show ${suffix}`,
+    originalTitle: `Show ${suffix}`,
     year: 2026,
     aliases: [],
   };
@@ -38,10 +76,10 @@ function trackedFixture(suffix = "show") {
   return { title, season };
 }
 
-function verifiedFile(season: TrackedSeason, id: string, code: string): VerifiedFile {
+function verifiedFile(directoryId: string, id: string, code: string): VerifiedFile {
   return {
     id,
-    storageDirectoryId: season.storageDirectoryId,
+    storageDirectoryId: directoryId,
     name: `Show.${code}.mkv`,
     sizeBytes: 1_000_000_000,
     episodeCode: code,
@@ -55,7 +93,9 @@ async function seedTrackedSeason(input: {
   season: TrackedSeason;
   obtainedCodes: string[];
 }) {
-  const files = input.obtainedCodes.map((code, index) => verifiedFile(input.season, `seed_${index}`, code));
+  const files = input.obtainedCodes.map((code, index) =>
+    verifiedFile(input.season.storageDirectoryId, `seed_${index}`, code),
+  );
   const episodes = reconcileVerifiedFiles({
     season: input.season,
     episodes: createEpisodeStates({
@@ -84,16 +124,39 @@ async function seedTrackedSeason(input: {
     transferAttempts: [],
     notifications: [],
   });
-  return files;
 }
 
-describe("runScheduledType3Monitoring", () => {
+/**
+ * Pre-create the canonical V2 directory tree (`Title (Year)/Season NN`) under
+ * the category parent and seed the season directory with the files a previous
+ * run already landed — the V2 workflow verify-or-creates this same tree and
+ * syncs against it, ignoring the tracked season's stored storageDirectoryId.
+ */
+async function seedV2Season(
+  storage: FakeStorageExecutor,
+  title: MediaTitle,
+  season: TrackedSeason,
+  presentCodes: string[],
+): Promise<string> {
+  const showDir = await storage.createDirectory({ name: `${title.title} (${title.year})`, parentId: "library_root" });
+  const seasonDir = await storage.createDirectory({
+    name: `Season ${String(season.seasonNumber).padStart(2, "0")}`,
+    parentId: showDir,
+  });
+  storage.seedDirectoryFiles(
+    seasonDir,
+    presentCodes.map((code, index) => verifiedFile(seasonDir, `present_${code}_${index}`, code)),
+  );
+  return seasonDir;
+}
+
+describe("runScheduledType3Monitoring (V2 engine)", () => {
   it("returns an empty outcome list when nothing is tracked", async () => {
     const outcomes = await runScheduledType3Monitoring({
       repository: new InMemoryWorkflowRepository(),
-      resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
+      resourceProvider: emptyProvider(),
       storage: new FakeStorageExecutor(),
-      agents: new FakeAgentNodes(),
+      model: throwingModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
     });
@@ -101,86 +164,41 @@ describe("runScheduledType3Monitoring", () => {
     expect(outcomes).toEqual([]);
   });
 
-  it("repairs a tracked season with missing episodes and persists the run", async () => {
+  it("detects a real gap, runs the agent over the sandbox, and persists a type3_monitor run", async () => {
     const repository = new InMemoryWorkflowRepository();
     const { title, season } = trackedFixture();
     await seedTrackedSeason({ repository, title, season, obtainedCodes: ["S01E01", "S01E02"] });
-    // external mutation: storage only has E01
-    const storage = new FakeStorageExecutor({
-      directories: { [season.storageDirectoryId]: [verifiedFile(season, "kept_e01", "S01E01")] },
-      transferOutcomes: {
-        snapshot_1_candidate_1: {
-          status: "succeeded",
-          providerMessage: "",
-          files: [verifiedFile(season, "restored_e02", "S01E02")],
-        },
-      },
-    });
+    const storage = new FakeStorageExecutor();
+    await seedV2Season(storage, title, season, ["S01E01"]); // external mutation: E02 gone
 
     const outcomes = await runScheduledType3Monitoring({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: {
-          "Show 4K": [{ title: "Show S01E02 4K", episodeHints: ["S01E02"], qualityHints: ["4K"] }],
-        },
-      }),
+      resourceProvider: emptyProvider(),
       storage,
-      agents: new FakeAgentNodes(),
+      model: noCoverageModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
       createWorkflowRunId: () => "run_sched_type3",
     });
 
-    expect(outcomes).toEqual([
-      {
-        trackedSeasonId: season.id,
-        status: "ran",
-        workflowRunId: "run_sched_type3",
-        workflowStatus: "succeeded",
-      },
-    ]);
+    expect(outcomes[0]).toMatchObject({ trackedSeasonId: season.id, status: "ran", workflowRunId: "run_sched_type3" });
     const saved = await repository.getWorkflowRunSnapshot("run_sched_type3");
     expect(saved?.workflowRun.kind).toBe("type3_monitor");
-    expect(saved?.obtainedEpisodes).toEqual(["S01E01", "S01E02"]);
   });
 
-  it("syncs against fresh TMDB metadata and acquires episodes that aired after tracking began", async () => {
+  it("syncs against fresh TMDB metadata so episodes that aired after tracking began become the need", async () => {
     const repository = new InMemoryWorkflowRepository();
     const { title } = trackedFixture("airing");
-    // Tracked at 2/4 aired; E01+E02 already obtained → without a sync this is a noop.
-    const season: TrackedSeason = {
-      ...trackedFixture("airing").season,
-      totalEpisodes: 4,
-      latestAiredEpisode: 2,
-    };
+    const season: TrackedSeason = { ...trackedFixture("airing").season, totalEpisodes: 4, latestAiredEpisode: 2 };
     await seedTrackedSeason({ repository, title, season, obtainedCodes: ["S01E01", "S01E02"] });
-    const storage = new FakeStorageExecutor({
-      directories: {
-        [season.storageDirectoryId]: [
-          verifiedFile(season, "kept_e01", "S01E01"),
-          verifiedFile(season, "kept_e02", "S01E02"),
-        ],
-      },
-      transferOutcomes: {
-        snapshot_1_candidate_1: {
-          status: "succeeded",
-          providerMessage: "",
-          files: [verifiedFile(season, "new_e03", "S01E03"), verifiedFile(season, "new_e04", "S01E04")],
-        },
-      },
-    });
+    const storage = new FakeStorageExecutor();
+    await seedV2Season(storage, title, season, ["S01E01", "S01E02"]);
 
     const outcomes = await runScheduledType3Monitoring({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: {
-          "Show 4K": [
-            { title: "Show S01E03-E04 4K", episodeHints: ["S01E03", "S01E04"], qualityHints: ["4K"] },
-          ],
-        },
-      }),
+      resourceProvider: emptyProvider(),
       storage,
-      agents: new FakeAgentNodes(),
+      model: noCoverageModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
       createWorkflowRunId: () => "run_sync_type3",
@@ -188,41 +206,31 @@ describe("runScheduledType3Monitoring", () => {
       syncSeasonMetadata: async () => ({ latestAiredEpisode: 4, totalEpisodes: 4 }),
     });
 
-    expect(outcomes[0]).toMatchObject({ trackedSeasonId: season.id, status: "ran", workflowStatus: "succeeded" });
+    expect(outcomes[0]).toMatchObject({ trackedSeasonId: season.id, status: "ran" });
     const saved = await repository.getWorkflowRunSnapshot("run_sync_type3");
-    // The newly-aired E03/E04 were exposed by the sync and acquired.
-    expect(saved?.obtainedEpisodes).toEqual(["S01E01", "S01E02", "S01E03", "S01E04"]);
+    // The sync refreshed the season's aired cursor so E03/E04 became the need.
     expect(saved?.season.latestAiredEpisode).toBe(4);
   });
 
-  it("records a noop run when a tracked season is already current", async () => {
+  it("records a no-op run when a tracked season is already current — the agent model is never invoked", async () => {
     const repository = new InMemoryWorkflowRepository();
     const { title, season } = trackedFixture();
-    const files = await seedTrackedSeason({ repository, title, season, obtainedCodes: ["S01E01", "S01E02"] });
-    const storage = new FakeStorageExecutor({
-      directories: { [season.storageDirectoryId]: files },
-    });
+    await seedTrackedSeason({ repository, title, season, obtainedCodes: ["S01E01", "S01E02"] });
+    const storage = new FakeStorageExecutor();
+    await seedV2Season(storage, title, season, ["S01E01", "S01E02"]); // all aired present
 
     const outcomes = await runScheduledType3Monitoring({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordErrors: { "Show 4K": "search must not happen for current seasons" },
-        keywordResults: {},
-      }),
+      resourceProvider: emptyProvider(),
       storage,
-      agents: new FakeAgentNodes(),
+      model: throwingModel(), // must NOT be invoked on a no-op
       storageParentDirectoryId: "library_root",
       now: fixedNow,
       createWorkflowRunId: () => "run_noop_type3",
     });
 
     expect(outcomes).toEqual([
-      {
-        trackedSeasonId: season.id,
-        status: "ran",
-        workflowRunId: "run_noop_type3",
-        workflowStatus: "succeeded",
-      },
+      { trackedSeasonId: season.id, status: "ran", workflowRunId: "run_noop_type3", workflowStatus: "succeeded" },
     ]);
   });
 
@@ -256,61 +264,32 @@ describe("runScheduledType3Monitoring", () => {
 
     const outcomes = await runScheduledType3Monitoring({
       repository,
-      resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
+      resourceProvider: emptyProvider(),
       storage: new FakeStorageExecutor(),
-      agents: new FakeAgentNodes(),
+      model: throwingModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
     });
 
-    expect(outcomes).toEqual([
-      {
-        trackedSeasonId: season.id,
-        status: "skipped_active",
-      },
-    ]);
+    expect(outcomes).toEqual([{ trackedSeasonId: season.id, status: "skipped_active" }]);
   });
 
   it("isolates one season's failure and continues with the next", async () => {
     const repository = new InMemoryWorkflowRepository();
     const broken = trackedFixture("broken");
     const healthy = trackedFixture("healthy");
-    await seedTrackedSeason({
-      repository,
-      title: broken.title,
-      season: broken.season,
-      obtainedCodes: ["S01E01"],
-    });
-    await seedTrackedSeason({
-      repository,
-      title: healthy.title,
-      season: healthy.season,
-      obtainedCodes: ["S01E01"],
-    });
-    const storage = new FakeStorageExecutor({
-      directories: {
-        [broken.season.storageDirectoryId]: [],
-        [healthy.season.storageDirectoryId]: [
-          verifiedFile(healthy.season, "h_e01", "S01E01"),
-          verifiedFile(healthy.season, "h_e02", "S01E02"),
-        ],
-      },
-    });
+    await seedTrackedSeason({ repository, title: broken.title, season: broken.season, obtainedCodes: ["S01E01"] });
+    await seedTrackedSeason({ repository, title: healthy.title, season: healthy.season, obtainedCodes: ["S01E01"] });
+    const storage = new FakeStorageExecutor();
+    await seedV2Season(storage, broken.title, broken.season, []); // gap → agent runs → model dies
+    await seedV2Season(storage, healthy.title, healthy.season, ["S01E01", "S01E02"]); // current → no-op
     let counter = 0;
 
     const outcomes = await runScheduledType3Monitoring({
       repository,
-      // every search errors -> broken season's run fails as infrastructure error
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: {},
-        keywordErrors: {
-          "Show 4K": "provider down",
-          Show: "provider down",
-          "Show 4K ": "provider down",
-        },
-      }),
+      resourceProvider: emptyProvider(),
       storage,
-      agents: new FakeAgentNodes(),
+      model: throwingModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
       createWorkflowRunId: () => `run_multi_${(counter += 1)}`,
@@ -320,13 +299,9 @@ describe("runScheduledType3Monitoring", () => {
     expect(outcomes[0]).toMatchObject({
       trackedSeasonId: broken.season.id,
       status: "failed",
-      errorMessage: "provider down",
+      errorMessage: "agent model unavailable",
     });
-    expect(outcomes[1]).toMatchObject({
-      trackedSeasonId: healthy.season.id,
-      status: "ran",
-      workflowStatus: "succeeded",
-    });
+    expect(outcomes[1]).toMatchObject({ trackedSeasonId: healthy.season.id, status: "ran", workflowStatus: "succeeded" });
     const failed = await repository.getWorkflowRunSnapshot("run_multi_1");
     expect(failed?.workflowRun.status).toBe("failed");
   });

@@ -148,6 +148,16 @@ export class FakeStorageExecutor implements StorageExecutor {
     return directoryId;
   }
 
+  /**
+   * Test-support: place verified files into a directory (creating it if needed).
+   * Use after createDirectory has resolved the canonical id a workflow will
+   * verify-or-create, to model files a previous run already landed there.
+   */
+  seedDirectoryFiles(directoryId: string, files: VerifiedFile[]): void {
+    const existing = this.directories.get(directoryId) ?? [];
+    this.directories.set(directoryId, [...existing, ...files.map((file) => ({ ...file }))]);
+  }
+
   async listVideoFiles(directoryId: string): Promise<VerifiedFile[]> {
     return this.filesFor(directoryId).map((file) => ({ ...file }));
   }

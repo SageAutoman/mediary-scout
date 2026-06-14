@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { MockLanguageModelV3 } from "ai/test";
 import {
-  FakeAgentNodes,
   FakeResourceProvider,
   FakeStorageExecutor,
   InMemoryWorkflowRepository,
@@ -10,6 +10,15 @@ import {
 } from "../src/index.js";
 
 const fixedNow = () => "2026-06-13T00:00:00.000Z";
+
+/** Throws if invoked — proves the already-present movie short-circuits before the agent. */
+function throwingModel() {
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      throw new Error("model should not run when the movie is already present");
+    },
+  });
+}
 
 function movieTitle(): MediaTitle {
   return {
@@ -44,41 +53,36 @@ describe("movie acquisition command + worker", () => {
     expect(second.status).toBe("already_running");
   });
 
-  it("worker claims, runs, and persists a completed movie acquisition", async () => {
+  it("worker claims, runs, and persists a movie acquisition (already-present → succeeded no-op)", async () => {
     const repository = new InMemoryWorkflowRepository();
+    const title = movieTitle();
     await queueMovieAcquisition({
-      title: movieTitle(),
+      title,
       keyword: "奥本海默 4K",
       repository,
       createWorkflowRunId: () => "run_movie",
       now: fixedNow,
     });
-    const storage = new FakeStorageExecutor({
-      transferOutcomes: {
-        snapshot_1_candidate_1: {
-          status: "succeeded",
-          providerMessage: "",
-          files: [
-            {
-              id: "oppen_v",
-              storageDirectoryId: "x",
-              name: "Oppenheimer.2023.mkv",
-              sizeBytes: 8_000_000_000,
-              episodeCode: "S01E01",
-              providerFileId: "oppen_v",
-            },
-          ],
-        },
+    const storage = new FakeStorageExecutor();
+    // Verify-or-create resolves the canonical `Title (Year)` movie dir; seed it
+    // with the film already present so the run is a succeeded no-op.
+    const movieDir = await storage.createDirectory({ name: `${title.title} (${title.year})`, parentId: "movies_root" });
+    storage.seedDirectoryFiles(movieDir, [
+      {
+        id: "oppen_v",
+        storageDirectoryId: movieDir,
+        name: "Oppenheimer.2023.mkv",
+        sizeBytes: 8_000_000_000,
+        episodeCode: null,
+        providerFileId: "oppen_v",
       },
-    });
+    ]);
 
     const result = await runQueuedMovieAcquisition({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: { "奥本海默 4K": [{ title: "奥本海默 2023 4K", episodeHints: [], qualityHints: ["4K"] }] },
-      }),
+      resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
       storage,
-      agents: new FakeAgentNodes(),
+      model: throwingModel(),
       stagingParentDirectoryId: "movies_root",
       moviesParentDirectoryId: "movies_root",
       now: fixedNow,

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { MockLanguageModelV3 } from "ai/test";
 import {
-  episodeCode,
-  FakeAgentNodes,
   FakeResourceProvider,
   FakeStorageExecutor,
   InMemoryWorkflowRepository,
@@ -9,16 +8,48 @@ import {
   runQueuedType2Workflow,
   type MediaTitle,
   type TrackedSeason,
-  type VerifiedFile,
 } from "../src/index.js";
 
-describe("runQueuedType2Workflow", () => {
+const USAGE = {
+  inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+} as const;
+
+/** Searches once, honestly reports no coverage. Drives the V2 sandbox loop. */
+function noCoverageModel() {
+  let i = 0;
+  const tool = (name: string, input: unknown) => ({
+    content: [{ type: "tool-call", toolCallId: `c${i}`, toolName: name, input: JSON.stringify(input) }],
+    finishReason: "tool-calls" as const,
+    usage: USAGE,
+    warnings: [],
+  });
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      i += 1;
+      if (i === 1) return tool("searchResources", { keyword: "show" });
+      if (i === 2) return tool("reportNoCoverage", { reason: "no candidates" });
+      return { content: [{ type: "text", text: "done" }], finishReason: "stop", usage: USAGE, warnings: [] };
+    },
+  });
+}
+
+/** A model whose API is down — a hard infra failure mid-run. */
+function throwingModel() {
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      throw new Error("agent model unavailable");
+    },
+  });
+}
+
+describe("runQueuedType2Workflow (V2 engine)", () => {
   it("returns idle when no queued type2 run exists", async () => {
     const result = await runQueuedType2Workflow({
       repository: new InMemoryWorkflowRepository(),
       resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
       storage: new FakeStorageExecutor(),
-      agents: new FakeAgentNodes(),
+      model: throwingModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
     });
@@ -26,7 +57,7 @@ describe("runQueuedType2Workflow", () => {
     expect(result).toEqual({ status: "idle" });
   });
 
-  it("claims one queued type2 run, executes it, and persists the result", async () => {
+  it("claims one queued type2 run, executes it on the V2 engine, and persists a type2_init snapshot", async () => {
     const repository = new InMemoryWorkflowRepository();
     const { title, season } = trackedFixture();
     await queueTrackingInitialization({
@@ -40,41 +71,20 @@ describe("runQueuedType2Workflow", () => {
 
     const result = await runQueuedType2Workflow({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: {
-          "Show 4K": [{ title: "Show S01E01 4K", episodeHints: ["S01E01"], qualityHints: ["4K"] }],
-        },
-      }),
-      storage: new FakeStorageExecutor({
-        directories: { [season.storageDirectoryId]: [] },
-        transferOutcomes: {
-          snapshot_1_candidate_1: {
-            status: "succeeded",
-            providerMessage: "",
-            files: [verifiedFile(season, "file_S01E01", "S01E01")],
-          },
-        },
-      }),
-      agents: new FakeAgentNodes(),
+      resourceProvider: emptyProvider(),
+      storage: new FakeStorageExecutor(),
+      model: noCoverageModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
     });
 
-    expect(result).toMatchObject({
-      status: "ran",
-      workflowRunId: "run_queued_type2",
-      workflowStatus: "succeeded",
-    });
-    await expect(repository.getWorkflowRunSnapshot("run_queued_type2")).resolves.toMatchObject({
-      workflowRun: {
-        id: "run_queued_type2",
-        status: "succeeded",
-      },
-      obtainedEpisodes: ["S01E01"],
-    });
+    expect(result).toMatchObject({ status: "ran", workflowRunId: "run_queued_type2" });
+    const snapshot = await repository.getWorkflowRunSnapshot("run_queued_type2");
+    expect(snapshot!.workflowRun.kind).toBe("type2_init");
+    expect(snapshot!.workflowRun.status).toBe("no_coverage");
   });
 
-  it("marks a claimed queued run as failed and clears initial episode state when execution fails", async () => {
+  it("marks a claimed run failed and clears initial episode state when the agent model dies mid-run", async () => {
     const repository = new InMemoryWorkflowRepository();
     const { title, season } = trackedFixture();
     await queueTrackingInitialization({
@@ -88,12 +98,9 @@ describe("runQueuedType2Workflow", () => {
 
     const result = await runQueuedType2Workflow({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: {},
-        keywordErrors: { "Show 4K": "provider unavailable" },
-      }),
+      resourceProvider: emptyProvider(),
       storage: new FakeStorageExecutor(),
-      agents: new FakeAgentNodes(),
+      model: throwingModel(),
       storageParentDirectoryId: "library_root",
       now: fixedNow,
     });
@@ -101,7 +108,7 @@ describe("runQueuedType2Workflow", () => {
     expect(result).toMatchObject({
       status: "failed",
       workflowRunId: "run_failing_type2",
-      errorMessage: "provider unavailable",
+      errorMessage: "agent model unavailable",
     });
     await expect(repository.getWorkflowRunSnapshot("run_failing_type2")).resolves.toMatchObject({
       workflowRun: {
@@ -118,6 +125,10 @@ describe("runQueuedType2Workflow", () => {
     await expect(repository.listEpisodeStates(season.id)).resolves.toEqual([]);
   });
 });
+
+function emptyProvider() {
+  return new FakeResourceProvider({ keywordResults: {} });
+}
 
 function trackedFixture(): { title: MediaTitle; season: TrackedSeason } {
   const title: MediaTitle = {
@@ -147,15 +158,4 @@ function trackedFixture(): { title: MediaTitle; season: TrackedSeason } {
 
 function fixedNow(): string {
   return "2026-06-11T00:00:00.000Z";
-}
-
-function verifiedFile(season: TrackedSeason, id: string, code: string): VerifiedFile {
-  return {
-    id,
-    storageDirectoryId: season.storageDirectoryId,
-    name: `Show.${episodeCode(season.seasonNumber, Number(code.slice(-2)))}.mkv`,
-    sizeBytes: 1_000_000_000,
-    episodeCode: code,
-    providerFileId: `provider_${id}`,
-  };
 }

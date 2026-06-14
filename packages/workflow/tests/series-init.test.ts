@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MockLanguageModelV3 } from "ai/test";
 import {
   FakeAgentNodes,
   FakeResourceProvider,
@@ -11,6 +12,64 @@ import {
   type MediaTitle,
   type VerifiedFile,
 } from "../src/index.js";
+
+const USAGE = {
+  inputTokens: { total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: undefined, text: undefined, reasoning: undefined },
+} as const;
+
+/** Searches once, honestly reports no coverage — drives the V2 sandbox loop. */
+function noCoverageModel() {
+  let i = 0;
+  const tool = (name: string, input: unknown) => ({
+    content: [{ type: "tool-call", toolCallId: `c${i}`, toolName: name, input: JSON.stringify(input) }],
+    finishReason: "tool-calls" as const,
+    usage: USAGE,
+    warnings: [],
+  });
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      i += 1;
+      if (i === 1) return tool("searchResources", { keyword: "show" });
+      if (i === 2) return tool("reportNoCoverage", { reason: "no candidates" });
+      return { content: [{ type: "text", text: "done" }], finishReason: "stop", usage: USAGE, warnings: [] };
+    },
+  });
+}
+
+/** Throws on any call — proves a no-op series run never invokes the agent. */
+function throwingModel() {
+  return new MockLanguageModelV3({
+    doGenerate: async () => {
+      throw new Error("model should not run when every season is already complete");
+    },
+  });
+}
+
+async function seedV2SeasonDir(
+  storage: FakeStorageExecutor,
+  title: MediaTitle,
+  seasonNumber: number,
+  parentId: string,
+  presentCodes: string[],
+): Promise<void> {
+  const showDir = await storage.createDirectory({ name: `${title.title} (${title.year})`, parentId });
+  const seasonDir = await storage.createDirectory({
+    name: `Season ${String(seasonNumber).padStart(2, "0")}`,
+    parentId: showDir,
+  });
+  storage.seedDirectoryFiles(
+    seasonDir,
+    presentCodes.map((code, index) => ({
+      id: `present_${code}_${index}`,
+      storageDirectoryId: seasonDir,
+      name: `The.Boys.${code}.mkv`,
+      sizeBytes: 1_000_000_000,
+      episodeCode: code,
+      providerFileId: `present_${code}_${index}`,
+    })),
+  );
+}
 
 const theBoys: MediaTitle = {
   id: "tmdb_tv_76479",
@@ -334,26 +393,17 @@ describe("queueSeriesInitialization + runQueuedSeriesInitialization", () => {
     });
     expect(again.status).toBe("already_running");
 
-    const storage = new FakeStorageExecutor({
-      transferOutcomes: {
-        snapshot_1_candidate_1: {
-          status: "succeeded",
-          providerMessage: "",
-          files: [file("f_s1e1", "S01E01"), file("f_s1e2", "S01E02"), file("f_s2e1", "S02E01"), file("f_s2e2", "S02E02")],
-        },
-      },
-    });
+    // Seed both seasons' canonical V2 dirs as already complete (all aired
+    // episodes present) so the run is a succeeded no-op and the agent is never
+    // invoked. S1: 2/2 aired; S2: 2/3 aired.
+    const storage = new FakeStorageExecutor();
+    await seedV2SeasonDir(storage, theBoys, 1, "library_root", ["S01E01", "S01E02"]);
+    await seedV2SeasonDir(storage, theBoys, 2, "library_root", ["S02E01", "S02E02"]);
     const workerResult = await runQueuedSeriesInitialization({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: {
-          "黑袍纠察队 4K": [
-            { title: "黑袍纠察队 S1-S2 混合包", episodeHints: ["S01E01", "S01E02", "S02E01", "S02E02"] },
-          ],
-        },
-      }),
+      resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
       storage,
-      agents: new FakeAgentNodes(),
+      model: throwingModel(),
       storageParentDirectoryId: "library_root",
       now: () => "2026-06-13T00:05:00.000Z",
     });
@@ -393,24 +443,12 @@ describe("queueSeriesInitialization + runQueuedSeriesInitialization", () => {
       now: () => "2026-06-13T00:00:00.000Z",
     });
 
-    const storage = new FakeStorageExecutor({
-      transferOutcomes: {
-        snapshot_1_candidate_1: {
-          status: "succeeded",
-          providerMessage: "",
-          files: [file("anime_s1e1", "S01E01")],
-        },
-      },
-    });
+    const storage = new FakeStorageExecutor();
     await runQueuedSeriesInitialization({
       repository,
-      resourceProvider: new FakeResourceProvider({
-        keywordResults: {
-          "躲在超市后门吸烟的两人 4K": [{ title: "躲在超市后门吸烟的两人 全集", episodeHints: ["S01E01"] }],
-        },
-      }),
+      resourceProvider: new FakeResourceProvider({ keywordResults: {} }),
       storage,
-      agents: new FakeAgentNodes(),
+      model: noCoverageModel(),
       storageParentDirectoryId: "tv_root",
       animeStorageParentDirectoryId: "anime_root",
       now: () => "2026-06-13T00:05:00.000Z",
