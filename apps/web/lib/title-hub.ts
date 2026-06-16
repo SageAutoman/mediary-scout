@@ -1,6 +1,7 @@
 import {
   createTmdbMetadataProviderFromEnv,
   getTrackedSeasonStatusView,
+  isMovieUnreleased,
   prepareSeriesTarget,
   queueSeriesInitialization,
   queueTrackingInitialization,
@@ -9,7 +10,12 @@ import {
   type PreparedSeriesTarget,
 } from "@media-track/workflow";
 import { findDemoCandidateByTmdbId } from "./demo-candidates";
-import { aggregateStateFromSeasons, type TitleAggregateState } from "./title-aggregate";
+import {
+  aggregateStateFromSeasons,
+  libraryWallState,
+  type LibraryWallStateValue,
+  type TitleAggregateState,
+} from "./title-aggregate";
 import {
   ensureDemoSeeded,
   getWorkflowRepository,
@@ -33,6 +39,7 @@ export interface TitleHubSeason {
 export type { TitleAggregateState };
 
 export interface TitleHubView {
+  kind: "tv";
   tmdbId: number;
   title: string;
   originalTitle: string;
@@ -46,6 +53,24 @@ export interface TitleHubView {
   /** A queued/running acquisition for this title — disables all acquire buttons. */
   acquiring: boolean;
 }
+
+/** A movie has no seasons — its detail page is a single status, not a season grid. */
+export interface MovieHubView {
+  kind: "movie";
+  tmdbId: number;
+  title: string;
+  originalTitle: string;
+  year: number;
+  overview: string;
+  posterPath: string | null;
+  backdropPath: string | null;
+  releaseDate: string | null;
+  /** acquired=已入库, reserved=未上映已预定, acquiring=获取中, missing=已上映未获取, untracked=未追踪. */
+  state: "acquired" | "reserved" | "acquiring" | "missing" | "untracked";
+  acquiring: boolean;
+}
+
+export type DetailView = TitleHubView | MovieHubView;
 
 const SERIES_TARGET_TTL_MS = 6 * 60 * 60 * 1000;
 const seriesTargetCache = new Map<number, { value: PreparedSeriesTarget; expiresAt: number }>();
@@ -179,11 +204,74 @@ export async function getTitleHubView(tmdbId: number): Promise<TitleHubView | nu
   );
 
   return {
+    kind: "tv",
     tmdbId,
     ...meta,
     aggregate,
     seasons,
     untrackedSeasonNumbers,
+    acquiring,
+  };
+}
+
+/**
+ * The detail entry the title page calls: a movie returns a single-status
+ * MovieHubView (fixing the "没有找到这部剧" dead end for films), everything else
+ * the season-shaped TitleHubView. Tracked movies resolve from the DB with no
+ * TMDB round-trip; an untracked title falls through to the TV hub, then to a
+ * TMDB movie lookup.
+ */
+export async function getDetailView(tmdbId: number): Promise<DetailView | null> {
+  const repository = getWorkflowRepository();
+  await ensureDemoSeeded(repository);
+  const now = new Date().toISOString();
+
+  const trackedForTitle = (await repository.listTrackedSeasonStates()).filter(
+    (state) => state.title.tmdbId === tmdbId,
+  );
+  const movieState = trackedForTitle.find((state) => state.title.type === "movie");
+  if (movieState) {
+    const acquiring = (await repository.listActiveWorkflowRuns()).some(
+      (snapshot) => snapshot.title.tmdbId === tmdbId,
+    );
+    const obtained = movieState.episodes.some((episode) => episode.obtained);
+    const reserved = isMovieUnreleased(movieState.title.releaseDate, now);
+    const state = acquiring ? "acquiring" : reserved ? "reserved" : obtained ? "acquired" : "missing";
+    return movieHubViewFromTitle(movieState.title, state, acquiring);
+  }
+
+  // Not a tracked movie: try the season-shaped (tv/anime) hub.
+  const tv = await getTitleHubView(tmdbId);
+  if (tv) {
+    return tv;
+  }
+
+  // Untracked: it may still be a movie known to TMDB (clicked from search before
+  // acquisition). Show its info with an "untracked" status.
+  const movieTarget = await movieTargetFromTmdbId(tmdbId);
+  if (movieTarget) {
+    const reserved = isMovieUnreleased(movieTarget.title.releaseDate, now);
+    return movieHubViewFromTitle(movieTarget.title, reserved ? "reserved" : "untracked", false);
+  }
+  return null;
+}
+
+function movieHubViewFromTitle(
+  title: MediaTitle,
+  state: MovieHubView["state"],
+  acquiring: boolean,
+): MovieHubView {
+  return {
+    kind: "movie",
+    tmdbId: title.tmdbId,
+    title: title.title,
+    originalTitle: title.originalTitle,
+    year: title.year,
+    overview: title.overview ?? "",
+    posterPath: title.posterPath ?? null,
+    backdropPath: title.backdropPath ?? null,
+    releaseDate: title.releaseDate ?? null,
+    state,
     acquiring,
   };
 }
@@ -247,7 +335,11 @@ export interface LibraryWallEntry {
   seasonCount: number;
   obtainedEpisodes: number;
   totalAiredEpisodes: number;
-  state: "tracking" | "complete" | "partial";
+  /** Full season episode count (sum across seasons) — the "9" in 已获取/已播/共 6/6/9. */
+  totalEpisodes: number;
+  /** Set for an unreleased (reserved) movie; drives the 预定 badge + air date. */
+  releaseDate: string | null;
+  state: LibraryWallStateValue;
 }
 
 export interface LibraryTypeCounts {
@@ -260,6 +352,7 @@ export interface LibraryTypeCounts {
 export async function getLibraryWall(): Promise<LibraryWallEntry[]> {
   const repository = getWorkflowRepository();
   await ensureDemoSeeded(repository);
+  const now = new Date().toISOString();
   const states = await repository.listTrackedSeasonStates();
   const byTitle = new Map<number, typeof states>();
   for (const state of states) {
@@ -279,14 +372,19 @@ export async function getLibraryWall(): Promise<LibraryWallEntry[]> {
     }
     let obtained = 0;
     let aired = 0;
+    let total = 0;
     let anyActive = false;
     for (const state of titleStates) {
       aired += Math.min(state.season.latestAiredEpisode, state.season.totalEpisodes);
+      total += state.season.totalEpisodes;
       obtained += state.episodes.filter((episode) => episode.obtained).length;
       if (state.season.status === "active") {
         anyActive = true;
       }
     }
+    // An unreleased movie is 预定 (reserved), not 有缺集 — its anchor reads aired=1
+    // but it simply hasn't come out yet.
+    const unreleased = title.type === "movie" && isMovieUnreleased(title.releaseDate, now);
     entries.push({
       tmdbId,
       title: title.title,
@@ -296,7 +394,9 @@ export async function getLibraryWall(): Promise<LibraryWallEntry[]> {
       seasonCount: titleStates.length,
       obtainedEpisodes: obtained,
       totalAiredEpisodes: aired,
-      state: obtained < aired ? "partial" : anyActive ? "tracking" : "complete",
+      totalEpisodes: total,
+      releaseDate: title.releaseDate ?? null,
+      state: libraryWallState({ obtained, aired, anyActive, unreleased }),
     });
   }
   return entries.sort((a, b) => a.title.localeCompare(b.title, "zh-Hans-CN"));

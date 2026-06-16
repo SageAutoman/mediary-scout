@@ -1591,6 +1591,13 @@ p {
   border: 1px solid rgba(255, 255, 255, 0.16);
 }
 
+/* 预定 (reserved movie) — info blue, matching the wall badge. */
+.hub-badge.tone-blue {
+  color: #bcd9ff;
+  background: rgba(83, 157, 245, 0.16);
+  border: 1px solid rgba(83, 157, 245, 0.55);
+}
+
 .card-badge {
   margin-left: 8px;
   vertical-align: 1px;
@@ -1672,6 +1679,12 @@ p {
 .wall-state.tone-amber {
   background: rgba(255, 164, 43, 0.9);
   color: #341f00;
+}
+
+/* 预定 (reserved / unreleased movie) — info blue, distinct from 追更中 indigo. */
+.wall-state.tone-blue {
+  background: rgba(83, 157, 245, 0.92);
+  color: #03203f;
 }
 
 /* "获取中" placeholder — a real poster behind a working scrim, not clickable */
@@ -1888,18 +1901,41 @@ li.hub-season-row.untracked {
   white-space: nowrap;
 }
 
+/* Tri-segment season bar: green = 已获取, amber = 已播但缺, track = 未播.
+   A thin marker sits at the aired boundary, so 6/6 of a 9-ep season reads as
+   "已追到最新，还有 3 集未播" instead of a misleading full bar. */
 .season-cell-progress {
-  height: 4px;
+  position: relative;
+  height: 5px;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.1);
-  overflow: hidden;
 }
 
-.season-cell-progress span {
-  display: block;
+.season-cell-progress .seg-aired,
+.season-cell-progress .seg-obtained {
+  position: absolute;
+  left: 0;
+  top: 0;
   height: 100%;
-  background: var(--accent);
   border-radius: var(--radius-pill);
+}
+
+.season-cell-progress .seg-aired {
+  background: rgba(255, 164, 43, 0.55);
+}
+
+.season-cell-progress .seg-obtained {
+  background: var(--accent);
+}
+
+.season-cell-progress .seg-marker {
+  position: absolute;
+  top: -1px;
+  height: 7px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.7);
 }
 
 .season-cell-obtained {

@@ -263,7 +263,8 @@ describe("formatDailyDigestPushText", () => {
       scheduledNotification({ titleName: "庆余年", seasonLabel: "第 2 季", kind: "tracking_completed", newlyObtained: [], realMissing: [] }),
       scheduledNotification({ titleName: "迷雾追踪", seasonLabel: "第 1 季", kind: "already_current", newlyObtained: [], realMissing: [] }),
     ]);
-    expect(text).toContain("每日巡检");
+    // No "每日巡检" header line in the body — the push title field carries it.
+    expect(text).not.toContain("📺 每日巡检");
     expect(text).toContain("翘楚 第 1 季");
     expect(text).toContain("E13");
     expect(text).toContain("灿烂的她 第 2 季");
@@ -277,7 +278,22 @@ describe("formatDailyDigestPushText", () => {
     const text = formatDailyDigestPushText([
       scheduledNotification({ titleName: "迷雾追踪", seasonLabel: "第 1 季", kind: "already_current", newlyObtained: [], realMissing: [] }),
     ]);
-    expect(text).toContain("每日巡检");
     expect(text).toContain("无更新");
+  });
+
+  it("renders markdown (bold names, bullet list) so the push isn't a flat blob", () => {
+    const text = formatDailyDigestPushText([
+      scheduledNotification({ titleName: "翘楚", seasonLabel: "第 1 季", kind: "episodes_restored", newlyObtained: ["E13"], realMissing: [] }),
+    ]);
+    expect(text).toContain("**翘楚 第 1 季**"); // bold name renders on Server酱
+    expect(text).toMatch(/^- /m); // markdown bullet, not a "·" text prefix
+  });
+
+  it("a changed show with no episode delta shows its concrete progress line, not a vague 已更新", () => {
+    const text = formatDailyDigestPushText([
+      scheduledNotification({ titleName: "达顿牧场", seasonLabel: "第 1 季", kind: "episodes_restored", newlyObtained: [], realMissing: [] }),
+    ]);
+    expect(text).toContain("已获取至最新"); // report.lines[0], the real progress
+    expect(text).not.toContain("已更新");
   });
 });

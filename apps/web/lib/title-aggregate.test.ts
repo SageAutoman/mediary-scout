@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   aggregateStateFromSeasons,
+  libraryWallState,
   seasonBadgeState,
   type AggregateSeasonInput,
 } from "./title-aggregate";
@@ -106,5 +107,33 @@ describe("seasonBadgeState", () => {
     expect(
       seasonBadgeState(season({ status: "completed", obtainedCount: 13, latestAiredEpisode: 12 })),
     ).toBe("complete");
+  });
+});
+
+describe("libraryWallState", () => {
+  it("reserved when the title is unreleased — even though its movie anchor reads aired=1/obtained=0", () => {
+    // 复仇者联盟5: future releaseDate, anchor aired=1 but unobtained. Without the
+    // unreleased gate this falls into 'partial' (有缺集 ⚠️), the bug we're fixing.
+    expect(libraryWallState({ obtained: 0, aired: 1, anyActive: false, unreleased: true })).toBe(
+      "reserved",
+    );
+  });
+
+  it("partial when released and obtained is behind aired", () => {
+    expect(libraryWallState({ obtained: 4, aired: 6, anyActive: true, unreleased: false })).toBe(
+      "partial",
+    );
+  });
+
+  it("tracking when caught up but an active season remains", () => {
+    expect(libraryWallState({ obtained: 6, aired: 6, anyActive: true, unreleased: false })).toBe(
+      "tracking",
+    );
+  });
+
+  it("complete when caught up and nothing active (e.g. an acquired movie)", () => {
+    expect(libraryWallState({ obtained: 1, aired: 1, anyActive: false, unreleased: false })).toBe(
+      "complete",
+    );
   });
 });

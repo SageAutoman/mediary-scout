@@ -328,12 +328,14 @@ export function formatDailyDigestPushText(notifications: NotificationEvent[]): s
   const changed = withReport.filter((notification) => notification.kind !== "already_current");
   const unchanged = withReport.length - changed.length;
 
-  const lines: string[] = ["📺 每日巡检", ""];
+  // No "每日巡检" header line: the push's title field already carries it, and a
+  // repeated heading rendered a duplicate title under it (same fix as the movie
+  // notification). The body is just the per-show list.
   if (changed.length === 0) {
-    lines.push(`本次巡检无更新，已检查 ${withReport.length} 部追踪剧集。`);
-    return lines.join("\n");
+    return `本次巡检无更新，已检查 ${withReport.length} 部追踪剧集。`;
   }
 
+  const lines: string[] = [];
   for (const notification of changed) {
     const report = notification.report;
     if (report === undefined) {
@@ -355,9 +357,13 @@ export function formatDailyDigestPushText(notifications: NotificationEvent[]): s
       if (report.realMissing.length > 0) {
         segments.push(`缺 ${report.realMissing.join("、")}`);
       }
-      detail = segments.join(" · ") || "已更新";
+      // No episode delta this sweep → fall back to the report's concrete progress
+      // line ("已获取至最新第 6 集"), never a content-free "已更新".
+      detail = segments.join(" · ") || report.lines[0] || "已是最新";
     }
-    lines.push(`· ${head} — ${detail}`);
+    // Markdown: bold name + bullet, so Server酱 renders a real list, not a flat
+    // text blob (desp is markdown; bare "·" lines read as a wall of plain text).
+    lines.push(`- **${head}** — ${detail}`);
   }
 
   if (unchanged > 0) {

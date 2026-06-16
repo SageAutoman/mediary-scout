@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { CheckCircle2, Clock3, Library, LoaderCircle, Search, TriangleAlert } from "lucide-react";
+import { CalendarClock, CheckCircle2, Clock3, Library, LoaderCircle, Search, TriangleAlert } from "lucide-react";
 import { AcquiringPoller } from "../components/acquiring-poller";
 import { AppSidebar } from "../components/app-sidebar";
 import { RequestTrackButton } from "../components/request-track-button";
@@ -473,11 +473,13 @@ function InProgressCard({ title }: { title: InProgressTitle }) {
 
 function PosterCard({ entry }: { entry: LibraryWallEntry }) {
   const stateMeta =
-    entry.state === "complete"
-      ? { tone: "green", icon: CheckCircle2, label: "已全部入库" }
-      : entry.state === "tracking"
-        ? { tone: "indigo", icon: Clock3, label: "追更中" }
-        : { tone: "amber", icon: TriangleAlert, label: "有缺集" };
+    entry.state === "reserved"
+      ? { tone: "blue", icon: CalendarClock, label: "预定（未上映）" }
+      : entry.state === "complete"
+        ? { tone: "green", icon: CheckCircle2, label: "已全部入库" }
+        : entry.state === "tracking"
+          ? { tone: "indigo", icon: Clock3, label: "追更中" }
+          : { tone: "amber", icon: TriangleAlert, label: "有缺集" };
   const StateIcon = stateMeta.icon;
 
   return (
@@ -496,14 +498,30 @@ function PosterCard({ entry }: { entry: LibraryWallEntry }) {
       <span className="wall-copy">
         <strong>{entry.title}</strong>
         <span>
-          {/* A movie has no seasons/episodes — show only the year. */}
+          {/* A movie has no seasons/episodes; reserved ones name the release date.
+              Series show 已获取/已播/共 (e.g. 6/6/9) so 6/6 of a 9-ep season no
+              longer reads as "100% complete". */}
           {entry.type === "movie"
-            ? entry.year
-            : `${entry.year} · ${entry.seasonCount} 季 · ${entry.obtainedEpisodes}/${entry.totalAiredEpisodes} 集`}
+            ? entry.state === "reserved"
+              ? `预定 · ${formatReleaseDate(entry.releaseDate)}上映`
+              : entry.year
+            : `${entry.year} · ${entry.seasonCount} 季 · ${entry.obtainedEpisodes}/${entry.totalAiredEpisodes}/${entry.totalEpisodes} 集`}
         </span>
       </span>
     </Link>
   );
+}
+
+/** "2026-12-16" → "12月16日"; falls back to the year when only a year is known. */
+function formatReleaseDate(releaseDate: string | null): string {
+  if (!releaseDate) {
+    return "";
+  }
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(releaseDate);
+  if (!match) {
+    return releaseDate;
+  }
+  return `${Number(match[2])}月${Number(match[3])}日`;
 }
 
 function SearchResultsSkeleton() {

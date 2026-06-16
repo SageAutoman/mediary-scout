@@ -9,7 +9,12 @@ import {
   RequestRemainingButton,
   RequestSeasonButton,
 } from "../../../components/title-action-buttons";
-import { getTitleHubView, type TitleHubSeason } from "../../../lib/title-hub";
+import {
+  getDetailView,
+  type MovieHubView,
+  type TitleHubSeason,
+  type TitleHubView,
+} from "../../../lib/title-hub";
 import { seasonBadgeState } from "../../../lib/title-aggregate";
 
 const aggregateBadge = {
@@ -59,18 +64,22 @@ async function TitleHub({ params }: { params: Promise<{ tmdbId: string }> }) {
   await connection();
   const { tmdbId: tmdbIdParam } = await params;
   const tmdbId = Number(tmdbIdParam);
-  const view = Number.isInteger(tmdbId) ? await getTitleHubView(tmdbId) : null;
+  const view = Number.isInteger(tmdbId) ? await getDetailView(tmdbId) : null;
 
   if (!view) {
     return (
       <div className="quiet-state">
         <TriangleAlert size={24} aria-hidden />
-        <strong>没有找到这部剧</strong>
+        <strong>没有找到这部影片</strong>
         <span>回到搜索页重新查找。</span>
       </div>
     );
   }
 
+  return view.kind === "movie" ? <MovieHub view={view} /> : <TvHub view={view} />;
+}
+
+function TvHub({ view }: { view: TitleHubView }) {
   const badge = aggregateBadge[view.aggregate];
   return (
     <AcquisitionLockProvider>
@@ -148,6 +157,62 @@ async function TitleHub({ params }: { params: Promise<{ tmdbId: string }> }) {
   );
 }
 
+const movieStateMeta = {
+  acquired: { label: "已入库", tone: "green" },
+  reserved: { label: "预定 · 未上映", tone: "blue" },
+  acquiring: { label: "获取中", tone: "indigo" },
+  missing: { label: "未获取", tone: "amber" },
+  untracked: { label: "未追踪", tone: "muted" },
+} as const;
+
+/** A movie's detail page: a single status, no season grid. */
+function MovieHub({ view }: { view: MovieHubView }) {
+  const meta = movieStateMeta[view.state];
+  const releaseLine =
+    view.state === "reserved" && view.releaseDate ? `${formatMovieDate(view.releaseDate)} 上映` : null;
+  return (
+    <AcquisitionLockProvider>
+      {view.acquiring ? <AcquiringPoller /> : null}
+      <section className="title-hub">
+        {view.backdropPath ? (
+          <div
+            className="hub-backdrop"
+            style={{ backgroundImage: `url(https://image.tmdb.org/t/p/w1280${view.backdropPath})` }}
+            aria-hidden
+          />
+        ) : null}
+        <header className="hub-header">
+          <div className="hub-poster">
+            {view.posterPath ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={`https://image.tmdb.org/t/p/w342${view.posterPath}`} alt={`${view.title} 海报`} />
+            ) : (
+              <span className="poster-fallback">{view.title.slice(0, 4)}</span>
+            )}
+          </div>
+          <div className="hub-title-block">
+            <span className={`hub-badge tone-${meta.tone}`}>{meta.label}</span>
+            <h1>
+              {view.title} <span className="hub-year">({view.year})</span>
+            </h1>
+            <p className="hub-attributes">
+              电影
+              {view.originalTitle && view.originalTitle !== view.title ? ` · ${view.originalTitle}` : ""}
+              {releaseLine ? ` · ${releaseLine}` : ""}
+            </p>
+            {view.overview ? <p className="hub-overview">{view.overview}</p> : null}
+          </div>
+        </header>
+      </section>
+    </AcquisitionLockProvider>
+  );
+}
+
+function formatMovieDate(releaseDate: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(releaseDate);
+  return match ? `${match[1]}年${Number(match[2])}月${Number(match[3])}日` : releaseDate;
+}
+
 function SeasonRow({
   season,
   tmdbId,
@@ -157,25 +222,36 @@ function SeasonRow({
   tmdbId: number;
   acquiring: boolean;
 }) {
-  const aired = Math.min(season.latestAiredEpisode, season.totalEpisodes);
-  const percent = aired > 0 ? Math.round((season.obtainedCount / aired) * 100) : 0;
+  const total = season.totalEpisodes;
+  const aired = Math.min(season.latestAiredEpisode, total);
+  // Obtained never exceeds aired for bar purposes (resource-ahead caps at aired).
+  const obtained = Math.min(season.obtainedCount, aired);
+  const airedPct = total > 0 ? (aired / total) * 100 : 0;
+  const obtainedPct = total > 0 ? (obtained / total) * 100 : 0;
 
   const badge = seasonBadge[seasonBadgeState(season)];
 
   const rowBody = (
     <>
       <span className="season-cell-name">第 {season.seasonNumber} 季</span>
-      <span className="season-cell-count">{season.totalEpisodes} 集</span>
+      <span className="season-cell-count">{total} 集</span>
       {badge ? (
         <span className={`hub-badge tone-${badge.tone}`}>{badge.label}</span>
       ) : (
         <span className="hub-badge tone-muted">未追踪</span>
       )}
       <span className="season-cell-progress" aria-hidden>
-        {season.tracked ? <span style={{ width: `${percent}%` }} /> : null}
+        {season.tracked ? (
+          <>
+            <span className="seg-aired" style={{ width: `${airedPct}%` }} />
+            <span className="seg-obtained" style={{ width: `${obtainedPct}%` }} />
+            {aired < total ? <span className="seg-marker" style={{ left: `${airedPct}%` }} /> : null}
+          </>
+        ) : null}
       </span>
+      {/* 已获取 / 已播 / 总集数 — so 6/6 of a 9-ep season isn't read as complete. */}
       <span className="season-cell-obtained">
-        {season.tracked ? `${season.obtainedCount}/${aired || season.totalEpisodes}` : "—"}
+        {season.tracked ? `${season.obtainedCount}/${aired}/${total}` : "—"}
       </span>
     </>
   );

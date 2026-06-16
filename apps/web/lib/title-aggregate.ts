@@ -41,6 +41,30 @@ export function seasonBadgeState(season: AggregateSeasonInput): SeasonBadgeState
   return season.status === "active" ? "airing" : "complete";
 }
 
+export type LibraryWallStateValue = "reserved" | "tracking" | "complete" | "partial";
+
+/**
+ * The poster-wall card state for a whole title. `reserved` (未上映电影) is a
+ * first-class state that takes precedence: a reserved movie's anchor season reads
+ * aired=1/obtained=0, which would otherwise fall into `partial` (有缺集 ⚠️) and
+ * misrepresent a film that simply hasn't released yet. The released-title logic
+ * mirrors the per-season test (`obtained < aired` ⇒ behind).
+ */
+export function libraryWallState(input: {
+  obtained: number;
+  aired: number;
+  anyActive: boolean;
+  unreleased: boolean;
+}): LibraryWallStateValue {
+  if (input.unreleased) {
+    return "reserved";
+  }
+  if (input.obtained < input.aired) {
+    return "partial";
+  }
+  return input.anyActive ? "tracking" : "complete";
+}
+
 export function aggregateStateFromSeasons(seasons: AggregateSeasonInput[]): TitleAggregateState {
   const states = seasons.map(seasonBadgeState);
   if (states.every((state) => state === "untracked")) {

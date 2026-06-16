@@ -236,7 +236,7 @@ function parseMovieCandidateId(candidateId: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
-async function movieTargetFromTmdbId(
+export async function movieTargetFromTmdbId(
   tmdbId: number,
 ): Promise<{ title: MediaTitle; keyword: string } | null> {
   if (process.env.MEDIA_TRACK_SEARCH_PROVIDER === "tmdb" && process.env.TMDB_READ_TOKEN) {
