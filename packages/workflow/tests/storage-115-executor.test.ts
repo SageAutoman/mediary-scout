@@ -427,14 +427,15 @@ describe("Storage115Executor", () => {
     expect(api.removedOfflineHashes).toEqual([]);
   });
 
-  it("does not cancel an offline task 115 reports as a completed 秒传 (file listing lags)", async () => {
+  it("does not cancel an offline task 115 reports as a 秒传 via statusText 下载成功, percentDone stuck at 0 (file listing lags)", async () => {
     const hash = "57e6d442793c87d7f81eecc675ab4eb3b4925bd3";
-    // 115 reports the task COMPLETE (秒传), but its file has not appeared in the
-    // staging dir within the grace window. The wall-clock-only logic would have
-    // cancelled this good 秒传; reading task status prevents that.
+    // REAL 115 shape (measured on the test root): a 秒传 reports statusText
+    // "下载成功" while percentDone STAYS 0 the whole time — the file is merely slow
+    // to list. A percentDone>=100 check would NEVER recognize it and would cancel
+    // this good 秒传; reading statusText prevents that.
     const api = new FakePan115Api({
       offlineTaskList: [
-        { infoHash: hash, name: "Movie", percentDone: 100, status: 2, statusText: "完成", url: "" },
+        { infoHash: hash, name: "Movie", percentDone: 0, status: 1, statusText: "下载成功", url: "" },
       ],
     });
     const executor = new Storage115Executor({
@@ -454,8 +455,41 @@ describe("Storage115Executor", () => {
     });
 
     expect(attempt.status).toBe("no_target_change");
-    expect(api.removedOfflineHashes).toEqual([]); // the completed 秒传 was kept
+    expect(api.removedOfflineHashes).toEqual([]); // the 秒传 was kept (NOT cancelled)
     expect(api.listOfflineTasksCalls).toBeGreaterThan(0); // status was actually read
+    // The attempt carries the ALIVE signal so the dead-link recorder (#15) never
+    // poisons this confirmed-but-lagging 秒传.
+    expect(attempt.providerMessage).toMatch(/下载成功|秒传 confirmed/);
+  });
+
+  it("cancels an offline task stuck 等待中 (no cache, percentDone 0 — the dead-magnet signature)", async () => {
+    const hash = "57e6d442793c87d7f81eecc675ab4eb3b4925bd3";
+    // REAL dead/no-cache shape: 115 accepts the magnet but the task sits at
+    // statusText "等待中" with percentDone 0 forever. We never wait on a real
+    // download, so it is dead-for-us → cancel it.
+    const api = new FakePan115Api({
+      offlineTaskList: [
+        { infoHash: hash, name: "Movie", percentDone: 0, status: 1, statusText: "等待中", url: "" },
+      ],
+    });
+    const executor = new Storage115Executor({
+      api,
+      offlineMaterializeAttempts: 2,
+      offlineMaterializePollMs: 1,
+      sleep: async () => {},
+    });
+
+    const attempt = await executor.transfer({
+      workflowRunId: "run_stuck_waiting",
+      directoryId: "123",
+      candidate: candidateFixture({
+        type: "magnet",
+        providerPayload: { url: `magnet:?xt=urn:btih:${hash}`, rawType: "magnet" },
+      }),
+    });
+
+    expect(attempt.status).toBe("no_target_change");
+    expect(api.removedOfflineHashes).toEqual([hash]); // stuck 等待中 → cancelled
   });
 
   it("cancels an offline task that task status shows still downloading (not 秒传)", async () => {

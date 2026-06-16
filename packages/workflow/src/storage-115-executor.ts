@@ -444,7 +444,7 @@ export class Storage115Executor implements StorageExecutor {
         }
       }
     }
-    const providerMessage = transferMessage(input.candidate, action, status);
+    const providerMessage = transferMessage(input.candidate, action, status, offlineTaskComplete);
 
     const attempt: TransferAttempt = {
       // Scope the id to the run: the per-executor counter resets when the worker
@@ -615,10 +615,14 @@ export class Storage115Executor implements StorageExecutor {
   }
 
   /**
-   * Whether 115 reports this offline task as a completed 秒传 (percentDone 100).
-   * A still-downloading or failed task is NOT complete → false, so the caller
-   * stops waiting and cancels it. Best-effort: a failed status probe returns
-   * false (treat as not-秒传) and never breaks the transfer.
+   * Whether 115 reports this offline task as a completed 秒传. The reliable signal
+   * is the statusText — measured on the real test root, a 秒传 reports
+   * statusText "下载成功" (success) while percentDone STAYS 0 the whole time, and a
+   * dead/no-cache task sits at "等待中" (waiting) / a real download at "下载中".
+   * So percentDone is useless here; we key on the success text (keeping
+   * percentDone>=100 only as a belt-and-suspenders for any "完成" reporting). A
+   * still-waiting/downloading/failed task is NOT complete → false, so the caller
+   * stops waiting and cancels it. Best-effort: a failed probe returns false.
    */
   private async isOfflineTaskComplete(infoHash: string): Promise<boolean> {
     let tasks;
@@ -629,7 +633,10 @@ export class Storage115Executor implements StorageExecutor {
     }
     const wanted = infoHash.toLowerCase();
     const task = tasks.find((entry) => entry.infoHash.toLowerCase() === wanted);
-    return task !== undefined && task.percentDone >= 100;
+    if (task === undefined) {
+      return false;
+    }
+    return /成功|完成/.test(task.statusText) || task.percentDone >= 100;
   }
 
   private async executeCandidateTransfer(
@@ -1037,7 +1044,14 @@ function transferMessage(
   candidate: ResourceCandidate,
   action: Pan115ActionResult,
   status: TransferStatus,
+  offlineTaskComplete: boolean,
 ): string {
+  // A CONFIRMED 秒传 (115 reported 下载成功) whose file merely lagged the listing
+  // window is ALIVE, not dead — say so explicitly so the dead-link recorder never
+  // poisons it (deadLinkReason whitelists 下载成功).
+  if (candidate.type === "magnet" && status === "no_target_change" && offlineTaskComplete) {
+    return "115 秒传 confirmed (下载成功); file listing lagging";
+  }
   if (action.message) {
     if (candidate.type === "magnet" && status === "no_target_change") {
       return `${action.message}; no target video materialized yet`;

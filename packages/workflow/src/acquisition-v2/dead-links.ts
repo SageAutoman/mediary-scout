@@ -69,7 +69,13 @@ export function deadLinkReason(
   if (DEATH_MESSAGE.test(message)) {
     return message;
   }
-  if (kind === "magnet" && attempt.status === "no_target_change" && !/任务已存在/.test(message)) {
+  if (
+    kind === "magnet" &&
+    attempt.status === "no_target_change" &&
+    // 任务已存在 = a prior GOOD task (errcode 10008); 下载成功 = the executor
+    // CONFIRMED a 秒传 whose file listing merely lagged — both are ALIVE, never dead.
+    !/任务已存在|下载成功/.test(message)
+  ) {
     return message || "magnet did not 秒传 (no target materialized)";
   }
   return null;

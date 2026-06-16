@@ -51,6 +51,13 @@ describe("deadLinkReason — conservative dead detection (a false positive hides
     expect(dead("no_target_change", "任务已存在，请勿输入重复的链接地址", "magnet")).toBeNull();
   });
 
+  it("NEVER records a CONFIRMED 秒传 whose file listing merely lagged (115 said 下载成功)", () => {
+    // The executor confirmed the magnet 秒传 (115 statusText 下载成功) but the file
+    // didn't list within the grace window → no_target_change. It is ALIVE, not
+    // dead — recording it would permanently hide a good resource.
+    expect(dead("no_target_change", "115 秒传 confirmed (下载成功); file listing lagging", "magnet")).toBeNull();
+  });
+
   it("does NOT record an unknown/transient failure (avoid false positives)", () => {
     // a non-death message (e.g. a network blip) must not poison the link forever
     expect(dead("failed", "网络超时，请重试", "pan115")).toBeNull();
