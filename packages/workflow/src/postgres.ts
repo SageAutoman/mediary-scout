@@ -275,6 +275,55 @@ export class PostgresWorkflowRepository implements WorkflowRepository {
     });
   }
 
+  async cancelQueuedWorkflowRun(
+    workflowRunId: string,
+  ): Promise<{ status: "cancelled" | "not_cancellable" }> {
+    return this.withTransaction(async (client) => {
+      const run = await this.selectOne<WorkflowRun>(
+        client,
+        "SELECT payload FROM workflow_runs WHERE id = $1",
+        [workflowRunId],
+      );
+      if (!run || run.status !== "queued") {
+        return { status: "not_cancellable" as const };
+      }
+      const seasonId = run.trackedSeasonId;
+      // The run's own children.
+      await client.query("DELETE FROM notifications WHERE workflow_run_id = $1", [workflowRunId]);
+      await client.query("DELETE FROM transfer_attempts WHERE workflow_run_id = $1", [workflowRunId]);
+      await client.query("DELETE FROM agent_decisions WHERE workflow_run_id = $1", [workflowRunId]);
+      await client.query("DELETE FROM resource_snapshots WHERE workflow_run_id = $1", [workflowRunId]);
+      await client.query("DELETE FROM workflow_runs WHERE id = $1", [workflowRunId]);
+
+      // Only tear down the tracking when no OTHER run still references the season
+      // (a queued init is the sole run for its fresh season → it's torn down,
+      // vanishing from the library; a re-queued run beside acquired history is not).
+      const others = await client.query(
+        "SELECT 1 FROM workflow_runs WHERE tracked_season_id = $1 LIMIT 1",
+        [seasonId],
+      );
+      if (others.rowCount === 0) {
+        await client.query("DELETE FROM episode_states WHERE tracked_season_id = $1", [seasonId]);
+        const season = await this.selectOne<TrackedSeason>(
+          client,
+          "SELECT payload FROM tracked_seasons WHERE id = $1",
+          [seasonId],
+        );
+        await client.query("DELETE FROM tracked_seasons WHERE id = $1", [seasonId]);
+        if (season) {
+          const siblingSeasons = await client.query(
+            "SELECT 1 FROM tracked_seasons WHERE media_title_id = $1 LIMIT 1",
+            [season.mediaTitleId],
+          );
+          if (siblingSeasons.rowCount === 0) {
+            await client.query("DELETE FROM media_titles WHERE id = $1", [season.mediaTitleId]);
+          }
+        }
+      }
+      return { status: "cancelled" as const };
+    });
+  }
+
   async getTrackedSeasonState(trackedSeasonId: string): Promise<TrackedSeasonState | null> {
     const season = await this.selectOne<TrackedSeason>(
       this.pool,

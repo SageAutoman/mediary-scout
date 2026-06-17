@@ -92,6 +92,15 @@ export interface WorkflowRepository extends DeadLinkStore {
    *  page; `percent` is clamped monotonic so retries never rewind the bar. No-op
    *  for an unknown run. */
   updateWorkflowRunProgress(workflowRunId: string, progress: WorkflowRunProgress): Promise<void>;
+  /**
+   * Cancel a still-QUEUED run (user changed their mind). Deletes the run AND the
+   * tracking it created (the run snapshot is the title/season's only source until
+   * the worker runs it), so the title vanishes from the library too — like the
+   * 获取 click never happened. Refuses (not_cancellable) once the worker has
+   * claimed it (running) or it is otherwise non-queued; that race is expected.
+   * Pure DB: a queued run has created no 115 directories yet.
+   */
+  cancelQueuedWorkflowRun(workflowRunId: string): Promise<{ status: "cancelled" | "not_cancellable" }>;
   getTrackedSeasonState(trackedSeasonId: string): Promise<TrackedSeasonState | null>;
   listTrackedSeasonStates(): Promise<TrackedSeasonState[]>;
   listEpisodeStates(trackedSeasonId: string): Promise<EpisodeState[]>;
@@ -287,6 +296,24 @@ export class InMemoryWorkflowRepository implements WorkflowRepository {
         progress: { ...progress, percent: Math.max(previousPercent, progress.percent) },
       },
     });
+  }
+
+  async cancelQueuedWorkflowRun(
+    workflowRunId: string,
+  ): Promise<{ status: "cancelled" | "not_cancellable" }> {
+    const stored = this.workflowRuns.get(workflowRunId);
+    if (!stored || stored.workflowRun.status !== "queued") {
+      return { status: "not_cancellable" };
+    }
+    const seasonId = stored.season.id;
+    this.workflowRuns.delete(workflowRunId);
+    const seasonStillReferenced = Array.from(this.workflowRuns.values()).some(
+      (snapshot) => snapshot.season.id === seasonId,
+    );
+    if (!seasonStillReferenced) {
+      this.episodesBySeason.delete(seasonId);
+    }
+    return { status: "cancelled" };
   }
 
   async getTrackedSeasonState(trackedSeasonId: string): Promise<TrackedSeasonState | null> {
