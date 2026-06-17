@@ -242,6 +242,20 @@ export class TmdbSearchProvider implements MediaSearchProvider {
   }
 }
 
+export function createTmdbMetadataProvider(
+  accesses: TmdbAccess[],
+  opts: { language?: string; fetchJson?: TmdbFetchJson } = {},
+): TmdbMetadataProvider {
+  return new TmdbMetadataProvider({ accesses, ...opts });
+}
+
+export function createTmdbSearchProvider(
+  accesses: TmdbAccess[],
+  opts: { language?: string; fetchJson?: TmdbFetchJson; maxResults?: number; tvDetailsLimit?: number } = {},
+): TmdbSearchProvider {
+  return new TmdbSearchProvider({ accesses, ...opts });
+}
+
 export function createTmdbMetadataProviderFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): TmdbMetadataProvider {

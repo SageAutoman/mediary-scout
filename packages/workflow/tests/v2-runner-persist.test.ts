@@ -138,7 +138,7 @@ describe("runner-v2 persist wrappers — V2 engine results persisted in the exis
       model: searchThenReportModel(),
       repository,
       workflowRun,
-      qualityPreference: "4K",
+      seasonQualityRecord: "4K",
     });
 
     const s1 = await repository.getWorkflowRunSnapshot("run-x_s1");

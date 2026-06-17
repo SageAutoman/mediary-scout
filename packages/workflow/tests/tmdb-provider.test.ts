@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  createTmdbMetadataProvider,
+  createTmdbSearchProvider,
   prepareMovieTarget,
   prepareTrackingTarget,
   TmdbMetadataProvider,
@@ -486,5 +488,21 @@ describe("TmdbSearchProvider multi-access fallback", () => {
     expect(out).toEqual([]);
     expect(calls).toHaveLength(2);
     expect(calls[1]).toContain("https://proxy.example/search/multi");
+  });
+});
+
+describe("createTmdbMetadataProvider / createTmdbSearchProvider", () => {
+  it("builds a metadata provider from an access list", async () => {
+    const provider = createTmdbMetadataProvider([{ baseURL: "https://proxy.example" }], {
+      fetchJson: async () => movieJson(9),
+    });
+    expect((await provider.getMovieDetails(9)).id).toBe(9);
+  });
+
+  it("builds a search provider from an access list", async () => {
+    const provider = createTmdbSearchProvider([{ baseURL: "https://proxy.example" }], {
+      fetchJson: async () => ({ results: [] }),
+    });
+    expect(await provider.searchMedia({ query: "x" })).toEqual([]);
   });
 });
