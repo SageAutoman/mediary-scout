@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { handleTmdbProxy, type KvLike } from "./handler";
 
-function fakeKv(initial: Record<string, string> = {}): KvLike & { puts: Array<{ key: string; ttl?: number }> } {
+function fakeKv(initial: Record<string, string> = {}): KvLike & { puts: Array<{ key: string; ttl: number | undefined }> } {
   const store = new Map(Object.entries(initial));
-  const puts: Array<{ key: string; ttl?: number }> = [];
+  const puts: Array<{ key: string; ttl: number | undefined }> = [];
   return {
     puts,
     async get(key) {

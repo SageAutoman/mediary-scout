@@ -1,0 +1,8 @@
+{
+  "name": "media-track-tmdb-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "kv_namespaces": [
+    { "binding": "TMDB_CACHE", "id": "REPLACE_AFTER_KV_CREATE" }
+  ]
+}
