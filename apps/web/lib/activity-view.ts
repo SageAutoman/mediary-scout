@@ -24,7 +24,8 @@ export interface ActivityActiveRun {
   progress: WorkflowRunProgress | null;
 }
 
-/** A run that finished during this browser session (session-scoped via `since`). */
+/** A recently-finished run. The client session-scopes 已完成 by matching these
+ *  against the runIds it observed active (see ActivityView.recentCompleted). */
 export interface ActivityCompletedItem {
   workflowRunId: string;
   title: string;
