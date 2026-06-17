@@ -270,6 +270,33 @@ export async function saveQualityPreferenceAction(
   }
 }
 
+export async function saveLlmConfigAction(input: {
+  baseURL: string;
+  modelId: string;
+  apiKey: string;
+}): Promise<PushSettingsActionResult> {
+  try {
+    const {
+      getWorkflowRepository,
+      LLM_BASE_URL_SETTING_KEY,
+      LLM_MODEL_ID_SETTING_KEY,
+      LLM_API_KEY_SETTING_KEY,
+    } = await import("../lib/workflow-runtime");
+    const repository = getWorkflowRepository();
+    await repository.setSetting(LLM_BASE_URL_SETTING_KEY, input.baseURL.trim());
+    await repository.setSetting(LLM_MODEL_ID_SETTING_KEY, input.modelId.trim());
+    // Only overwrite the key when the user actually typed a new one — a blank
+    // submit keeps the stored key (the form never echoes it back).
+    const apiKey = input.apiKey.trim();
+    if (apiKey) {
+      await repository.setSetting(LLM_API_KEY_SETTING_KEY, apiKey);
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, message: `保存失败：${String(error)}` };
+  }
+}
+
 export async function testPushNotificationAction(
   settings: Record<string, string>,
 ): Promise<PushSettingsActionResult> {

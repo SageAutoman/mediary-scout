@@ -1,11 +1,12 @@
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { Bell, Cable, CalendarClock, Gauge, Languages, ShieldCheck, TriangleAlert } from "lucide-react";
+import { Bell, Bot, Cable, CalendarClock, Gauge, Languages, ShieldCheck, TriangleAlert } from "lucide-react";
 import { AppSidebar } from "../../components/app-sidebar";
 import { Pan115QrConnect } from "../../components/pan115-qr-connect";
 import { PushNotificationForm } from "../../components/push-notification-form";
 import { PreferredLanguageForm } from "../../components/preferred-language-form";
 import { QualityPreferenceForm } from "../../components/quality-preference-form";
+import { LlmConfigForm } from "../../components/llm-config-form";
 import { DailySweepForm } from "../../components/daily-sweep-form";
 import {
   getDailySweepTime,
@@ -13,6 +14,9 @@ import {
   getWorkflowRepository,
   PREFERRED_LANGUAGE_SETTING_KEY,
   QUALITY_PREFERENCE_SETTING_KEY,
+  LLM_BASE_URL_SETTING_KEY,
+  LLM_MODEL_ID_SETTING_KEY,
+  LLM_API_KEY_SETTING_KEY,
 } from "../../lib/workflow-runtime";
 
 export default function SettingsPage() {
@@ -34,6 +38,9 @@ export default function SettingsPage() {
         </Suspense>
         <Suspense fallback={<div className="skeleton skeleton-heading" />}>
           <QualityPreferenceSection />
+        </Suspense>
+        <Suspense fallback={<div className="skeleton skeleton-heading" />}>
+          <LlmConfigSection />
         </Suspense>
         <Suspense fallback={<div className="skeleton skeleton-heading" />}>
           <DailySweepSection />
@@ -84,6 +91,29 @@ async function QualityPreferenceSection() {
         </div>
       </div>
       <QualityPreferenceForm initial={initial} />
+    </section>
+  );
+}
+
+async function LlmConfigSection() {
+  await connection();
+  const repository = getWorkflowRepository();
+  const baseURL = (await repository.getSetting(LLM_BASE_URL_SETTING_KEY)) ?? "";
+  const modelId = (await repository.getSetting(LLM_MODEL_ID_SETTING_KEY)) ?? "";
+  const apiKeySet = Boolean((await repository.getSetting(LLM_API_KEY_SETTING_KEY))?.trim());
+
+  return (
+    <section className="panel" style={{ maxWidth: 720, marginTop: 24 }}>
+      <div className="panel-header">
+        <div>
+          <h2 className="panel-title">
+            <Bot size={16} aria-hidden style={{ verticalAlign: "-2px", marginRight: 8 }} />
+            AI 模型
+          </h2>
+          <p className="panel-note">驱动获取 agent 的大模型(OpenAI 兼容);自带 key,只存你本机</p>
+        </div>
+      </div>
+      <LlmConfigForm baseURL={baseURL} modelId={modelId} apiKeySet={apiKeySet} />
     </section>
   );
 }

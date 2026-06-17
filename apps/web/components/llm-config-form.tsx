@@ -1,0 +1,81 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { Check, LoaderCircle } from "lucide-react";
+import { saveLlmConfigAction } from "../app/actions";
+
+export function LlmConfigForm({
+  baseURL: initialBaseURL,
+  modelId: initialModelId,
+  apiKeySet,
+}: {
+  baseURL: string;
+  modelId: string;
+  apiKeySet: boolean;
+}) {
+  const [isPending, startTransition] = useTransition();
+  const [baseURL, setBaseURL] = useState(initialBaseURL);
+  const [modelId, setModelId] = useState(initialModelId);
+  // The API key is never echoed back from the server; the user only types one to
+  // set/replace it. Blank submit keeps the stored key.
+  const [apiKey, setApiKey] = useState("");
+  const [result, setResult] = useState<string | null>(null);
+
+  const handleSave = () => {
+    startTransition(async () => {
+      const res = await saveLlmConfigAction({ baseURL, modelId, apiKey });
+      setResult(res.success ? "✅ 保存成功" : `❌ ${res.message ?? "保存失败"}`);
+      if (res.success) setApiKey("");
+      setTimeout(() => setResult(null), 3000);
+    });
+  };
+
+  return (
+    <div className="push-form">
+      <p className="panel-note" style={{ marginBottom: 12 }}>
+        AI 模型(OpenAI 兼容)。自带你自己的 key——它只存在你这台机器的数据库里,作者看不到。留空 API Key 不会改动已保存的值。
+      </p>
+      <div className="push-field">
+        <label className="push-label">Base URL</label>
+        <input
+          type="text"
+          className="setting-control"
+          value={baseURL}
+          onChange={(event) => setBaseURL(event.target.value)}
+          placeholder="https://api.openai.com/v1"
+          aria-label="LLM Base URL"
+        />
+      </div>
+      <div className="push-field">
+        <label className="push-label">Model ID</label>
+        <input
+          type="text"
+          className="setting-control"
+          value={modelId}
+          onChange={(event) => setModelId(event.target.value)}
+          placeholder="gpt-4o-mini"
+          aria-label="LLM Model ID"
+        />
+      </div>
+      <div className="push-field">
+        <label className="push-label">API Key</label>
+        <input
+          type="password"
+          className="setting-control"
+          value={apiKey}
+          onChange={(event) => setApiKey(event.target.value)}
+          placeholder={apiKeySet ? "已设置(留空不改)" : "sk-…"}
+          aria-label="LLM API Key"
+          autoComplete="off"
+        />
+      </div>
+      <div className="setting-row" style={{ marginTop: 4 }}>
+        <button type="button" className="primary-button" onClick={handleSave} disabled={isPending}>
+          {isPending ? <LoaderCircle size={14} className="spin" aria-hidden /> : <Check size={14} aria-hidden />}
+          保存
+        </button>
+        {result ? <span className="panel-note">{result}</span> : null}
+      </div>
+    </div>
+  );
+}

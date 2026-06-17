@@ -6,6 +6,7 @@ import {
   FakeResourceProvider,
   FakeStorageExecutor,
   createNotifyChannelsFromEnv,
+  createAgentModel,
   createAgentModelFromEnv,
   createStubAcquisitionModel,
   dispatchNotifications,
@@ -56,7 +57,7 @@ let demoSeedPromise: Promise<void> | null = null;
 let fakeResourceProvider: ResourceProvider | null = null;
 let fakeStorageExecutor: StorageExecutor | null = null;
 let agentModel:
-  | { adapter: "fake" | "vercel-ai"; model: ReturnType<typeof createAgentModelFromEnv> }
+  | { signature: string; model: ReturnType<typeof createAgentModelFromEnv> }
   | null = null;
 
 /** The Postgres connection string for durable dev/prod state. SQLite has been
@@ -233,6 +234,28 @@ export async function getQualityPreference(
 ): Promise<"high" | "medium" | undefined> {
   const value = (await repository.getSetting(QUALITY_PREFERENCE_SETTING_KEY))?.trim();
   return value === "high" || value === "medium" ? value : undefined;
+}
+
+// AI 模型 (LLM) 三件套 — OpenAI-compatible. Stored in the user's OWN app_settings
+// (self-host, BYO-key: the operator never sees these). DB overrides .env.
+export const LLM_BASE_URL_SETTING_KEY = "llm_base_url";
+export const LLM_API_KEY_SETTING_KEY = "llm_api_key";
+export const LLM_MODEL_ID_SETTING_KEY = "llm_model_id";
+
+/** The user's configured OpenAI-compatible LLM (Settings → AI 模型). Each field is
+ *  undefined when unset/blank, so `getAgentModel` cleanly falls back to .env. */
+export async function getLlmConfig(repository: {
+  getSetting(key: string): Promise<string | null>;
+}): Promise<{ baseURL: string | undefined; apiKey: string | undefined; modelId: string | undefined }> {
+  const read = async (key: string): Promise<string | undefined> => {
+    const value = (await repository.getSetting(key))?.trim();
+    return value ? value : undefined;
+  };
+  return {
+    baseURL: await read(LLM_BASE_URL_SETTING_KEY),
+    apiKey: await read(LLM_API_KEY_SETTING_KEY),
+    modelId: await read(LLM_MODEL_ID_SETTING_KEY),
+  };
 }
 
 export const DAILY_SWEEP_TIME_SETTING_KEY = "daily_sweep_time";
@@ -668,13 +691,29 @@ async function getAgentModel(repository: {
   qualityPreference: "high" | "medium" | undefined;
 }> {
   assertWorkflowAgentAdapterPolicy(process.env);
-  const adapter = process.env.MEDIA_TRACK_AGENT_ADAPTER === "vercel-ai" ? "vercel-ai" : "fake";
+  const env = process.env;
+  const adapter = env.MEDIA_TRACK_AGENT_ADAPTER === "vercel-ai" ? "vercel-ai" : "fake";
   const preferredLanguage = await getPreferredLanguage(repository);
   const qualityPreference = await getQualityPreference(repository);
-  if (agentModel?.adapter !== adapter) {
+
+  // Resolve the live model config DB-first, then .env, then the built-in MiMo
+  // defaults (inside createAgentModel). Settings → AI 模型 thus overrides .env.
+  const llm = await getLlmConfig(repository);
+  const apiKey = llm.apiKey ?? env.AGENT_MODEL_API_KEY ?? env.XIAOMI_MIMO_API_KEY;
+  const baseURL = llm.baseURL ?? env.AGENT_MODEL_BASE_URL ?? env.XIAOMI_MIMO_BASE_URL;
+  const modelId = llm.modelId ?? env.AGENT_MODEL_ID ?? env.XIAOMI_MIMO_MODEL_ID;
+  const resolved = {
+    ...(apiKey === undefined ? {} : { apiKey }),
+    ...(baseURL === undefined ? {} : { baseURL }),
+    ...(modelId === undefined ? {} : { modelId }),
+  };
+  // Rebuild the cached model whenever adapter OR resolved config changes (so a
+  // Settings edit takes effect without a restart).
+  const signature = `${adapter}|${baseURL ?? ""}|${modelId ?? ""}|${apiKey ?? ""}`;
+  if (agentModel?.signature !== signature) {
     agentModel = {
-      adapter,
-      model: adapter === "vercel-ai" ? createAgentModelFromEnv(process.env) : createStubAcquisitionModel(),
+      signature,
+      model: adapter === "vercel-ai" ? createAgentModel(resolved) : createStubAcquisitionModel(),
     };
   }
   return { model: agentModel.model, preferredLanguage, qualityPreference };

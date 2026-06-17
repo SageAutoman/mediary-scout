@@ -2337,6 +2337,18 @@ select.setting-control {
   padding: 0;
 }
 
+/* Stacked label + control (used by the LLM 三件套 form). */
+.push-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.push-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
 .push-channel {
   display: flex;
   flex-direction: column;

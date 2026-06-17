@@ -39,6 +39,14 @@ export function createAgentProviderConfig(options: AgentModelOptions = {}): {
   return { providerSettings, modelId: options.modelId ?? DEFAULT_MODEL_ID };
 }
 
+/** Build the live LanguageModel from explicit options (DB settings), with the
+ *  built-in MiMo defaults filling any gap. Used by the web layer to honor the
+ *  user's Settings → AI 模型 config (BYO-key self-host). */
+export function createAgentModel(options: AgentModelOptions = {}): LanguageModel {
+  const { providerSettings, modelId } = createAgentProviderConfig(options);
+  return createOpenAICompatible(providerSettings)(modelId);
+}
+
 /**
  * Build the live LanguageModel from env. Reads AGENT_MODEL_* with XIAOMI_MIMO_*
  * as the fallback (same precedence the web/worker and interrogation use).
