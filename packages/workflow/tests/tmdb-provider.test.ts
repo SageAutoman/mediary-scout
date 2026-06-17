@@ -378,3 +378,92 @@ describe("TmdbSearchProvider", () => {
     expect(target.keyword).toBe("千与千寻"); // bare title — no quality token in the keyword
   });
 });
+
+const movieJson = (id: number) => ({
+  id,
+  title: "x",
+  original_title: "x",
+  release_date: "1994-01-01",
+  overview: "",
+  poster_path: null,
+  backdrop_path: null,
+  genres: [],
+  origin_country: [],
+});
+
+describe("TmdbMetadataProvider multi-access fallback", () => {
+  it("uses the first access and skips the rest on success", async () => {
+    const calls: string[] = [];
+    const provider = new TmdbMetadataProvider({
+      accesses: [
+        { baseURL: "https://primary.example/3", readToken: "userkey" },
+        { baseURL: "https://proxy.example", readToken: "proxykey" },
+      ],
+      fetchJson: async (url) => {
+        calls.push(url);
+        return movieJson(278);
+      },
+    });
+    await provider.getMovieDetails(278);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("https://primary.example/3/movie/278");
+  });
+
+  it("falls back to the next access when the first throws", async () => {
+    const calls: string[] = [];
+    const provider = new TmdbMetadataProvider({
+      accesses: [
+        { baseURL: "https://primary.example/3", readToken: "badkey" },
+        { baseURL: "https://proxy.example" },
+      ],
+      fetchJson: async (url) => {
+        calls.push(url);
+        if (url.startsWith("https://primary.example")) throw new Error("HTTP 401");
+        return movieJson(278);
+      },
+    });
+    const details = await provider.getMovieDetails(278);
+    expect(details.id).toBe(278);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("https://proxy.example/movie/278");
+  });
+
+  it("throws when every access fails", async () => {
+    const provider = new TmdbMetadataProvider({
+      accesses: [
+        { baseURL: "https://a.example/3", readToken: "k" },
+        { baseURL: "https://b.example" },
+      ],
+      fetchJson: async () => {
+        throw new Error("boom");
+      },
+    });
+    await expect(provider.getMovieDetails(278)).rejects.toThrow(/access/i);
+  });
+
+  it("sends Authorization only when the access has a readToken", async () => {
+    const seen: Array<Record<string, string>> = [];
+    const provider = new TmdbMetadataProvider({
+      accesses: [{ baseURL: "https://proxy.example" }],
+      fetchJson: async (_url, init) => {
+        seen.push(init.headers);
+        return movieJson(1);
+      },
+    });
+    await provider.getMovieDetails(1);
+    expect(seen[0]?.Authorization).toBeUndefined();
+  });
+
+  it("still supports the legacy single readToken option", async () => {
+    const seen: Array<Record<string, string>> = [];
+    const provider = new TmdbMetadataProvider({
+      readToken: "legacy",
+      fetchJson: async (_url, init) => {
+        seen.push(init.headers);
+        return movieJson(1);
+      },
+    });
+    await provider.getMovieDetails(1);
+    expect(seen[0]?.Authorization).toBe("Bearer legacy");
+  });
+});

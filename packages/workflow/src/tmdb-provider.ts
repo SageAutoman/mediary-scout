@@ -23,8 +23,63 @@ export interface TmdbFetchInit {
 
 export type TmdbFetchJson = (url: string, init: TmdbFetchInit) => Promise<unknown>;
 
+export const TMDB_DIRECT_BASE_URL = "https://api.themoviedb.org/3";
+
+/** One way to reach TMDB: a base URL and an optional bearer token. The proxy
+ *  access omits the token (the Worker injects the author's key server-side). */
+export interface TmdbAccess {
+  baseURL: string;
+  readToken?: string;
+}
+
+function normalizeAccess(access: TmdbAccess): TmdbAccess {
+  const baseURL = access.baseURL.replace(/\/+$/, "");
+  return access.readToken === undefined ? { baseURL } : { baseURL, readToken: access.readToken };
+}
+
+/** Try each access in order; first success wins, all-fail throws. This is the
+ *  one chokepoint where user-key → proxy fallback lives. */
+async function fetchViaAccessChain(
+  accesses: TmdbAccess[],
+  path: string,
+  query: Record<string, string>,
+  fetchJson: TmdbFetchJson,
+): Promise<unknown> {
+  let lastError: unknown = new Error("no TMDB access configured");
+  for (const access of accesses) {
+    const url = `${access.baseURL}/${path}?${new URLSearchParams(query).toString()}`;
+    const headers: Record<string, string> = { "Content-Type": "application/json;charset=utf-8" };
+    if (access.readToken !== undefined) {
+      headers.Authorization = `Bearer ${access.readToken}`;
+    }
+    try {
+      return await fetchJson(url, { method: "GET", headers });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`All ${accesses.length} TMDB access(es) failed: ${String(lastError)}`);
+}
+
+/** Build the access list from either the new `accesses` or the legacy single
+ *  `{readToken, baseURL}` options shape. */
+function resolveAccesses(options: {
+  accesses?: TmdbAccess[];
+  readToken?: string;
+  baseURL?: string;
+}): TmdbAccess[] {
+  if (options.accesses && options.accesses.length > 0) {
+    return options.accesses.map(normalizeAccess);
+  }
+  if (options.readToken !== undefined) {
+    return [normalizeAccess({ baseURL: options.baseURL ?? TMDB_DIRECT_BASE_URL, readToken: options.readToken })];
+  }
+  throw new Error("TmdbMetadataProvider requires `accesses` or `readToken`");
+}
+
 export interface TmdbMetadataProviderOptions {
-  readToken: string;
+  readToken?: string;
+  accesses?: TmdbAccess[];
   baseURL?: string;
   language?: string;
   fetchJson?: TmdbFetchJson;
@@ -92,14 +147,12 @@ interface TmdbMovieDetails {
 }
 
 export class TmdbMetadataProvider {
-  private readonly readToken: string;
-  private readonly baseURL: string;
+  private readonly accesses: TmdbAccess[];
   private readonly language: string;
   private readonly fetchJson: TmdbFetchJson;
 
   constructor(options: TmdbMetadataProviderOptions) {
-    this.readToken = options.readToken;
-    this.baseURL = (options.baseURL ?? "https://api.themoviedb.org/3").replace(/\/+$/, "");
+    this.accesses = resolveAccesses(options);
     this.language = options.language ?? "zh-CN";
     this.fetchJson = options.fetchJson ?? defaultFetchJson;
   }
@@ -125,14 +178,7 @@ export class TmdbMetadataProvider {
   }
 
   private async get(path: string, query: Record<string, string>): Promise<unknown> {
-    const url = `${this.baseURL}/${path}?${new URLSearchParams(query).toString()}`;
-    return this.fetchJson(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${this.readToken}`,
-        "Content-Type": "application/json;charset=utf-8",
-      },
-    });
+    return fetchViaAccessChain(this.accesses, path, query, this.fetchJson);
   }
 }
 
